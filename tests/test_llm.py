@@ -1,7 +1,7 @@
 import json
 import tempfile
 import unittest
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO, StringIO
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -101,6 +101,27 @@ class GeneratorTests(unittest.TestCase):
     def test_no_evidence_means_no_request(self):
         self.assertIsNone(self.generator.generate("Вопрос", {}, (), is_demo=True))
         self.generator.opener.open.assert_not_called()
+
+    def test_case_telegram_requests_require_tester_and_unexpired_session(self):
+        self.generator.allow_case_data = True
+        self.generator.opener.open.return_value = response_for(valid_result())
+        self.assertIsNone(self.generate(chat_id=123))
+        self.generator.test_chat_ids = frozenset({123})
+        self.assertIsNone(self.generate(chat_id=123))
+        self.generator.test_expires_at = datetime.now(UTC) + timedelta(hours=1)
+        self.assertIsNone(self.generate(chat_id=456))
+        self.generator.opener.open.assert_not_called()
+        self.assertIsNotNone(self.generate(chat_id=123))
+        self.generator.test_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        self.assertIsNone(self.generate(chat_id=123))
+        self.assertEqual(self.generator.opener.open.call_count, 1)
+
+    def test_request_budget_includes_failed_requests(self):
+        self.generator.remaining_requests = 1
+        self.generator.opener.open.side_effect = TimeoutError()
+        self.assertIsNone(self.generate(is_demo=True))
+        self.assertIsNone(self.generate(is_demo=True))
+        self.assertEqual(self.generator.opener.open.call_count, 1)
 
     def test_provider_configuration_and_openrouter_route(self):
         self.assertIsNone(generator_from_env({}))

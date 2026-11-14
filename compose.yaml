@@ -51,6 +51,9 @@ services:
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
       LLM_TIMEOUT_SECONDS: "${LLM_TIMEOUT_SECONDS:-15}"
       LLM_ALLOW_CASE_DATA: "${LLM_ALLOW_CASE_DATA:-false}"
+      LLM_TEST_CHAT_IDS: "${LLM_TEST_CHAT_IDS:-}"
+      LLM_TEST_EXPIRES_AT: "${LLM_TEST_EXPIRES_AT:-}"
+      LLM_MAX_REQUESTS: "${LLM_MAX_REQUESTS:-30}"
     volumes:
       - catalog:/app/catalog:ro
       - runtime:/app/runtime

@@ -162,7 +162,7 @@ class Assistant:
         advice = compose_advice(question, evidence, state.profile, obstacle)
         if self.generator:
             generated = self.generator.generate(question, state.profile, result.evidence,
-                                                obstacle=obstacle, is_demo=self.catalog.is_demo)
+                                                obstacle=obstacle, is_demo=self.catalog.is_demo, chat_id=chat)
             if generated:
                 evidence, advice = generated
         action = self.conversations.new_action(advice.action, advice.passage, advice.url)

@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from dataclasses import replace
+from datetime import UTC, datetime
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -59,24 +60,41 @@ class NoRedirects(HTTPRedirectHandler):
 
 
 class ResponseGenerator:
-    def __init__(self, provider, api_key, model, *, timeout=15, allow_case_data=False):
+    def __init__(self, provider, api_key, model, *, timeout=15, allow_case_data=False,
+                 test_chat_ids=(), test_expires_at=None, max_requests=30):
         if provider not in PROVIDERS:
             raise ValueError("LLM_PROVIDER: допустимы none, xai или openrouter.")
         if not api_key or not model:
             raise ValueError(f"Для {provider} укажите API-ключ и LLM_MODEL.")
         if not 1 <= timeout <= 60:
             raise ValueError("LLM_TIMEOUT_SECONDS должен быть от 1 до 60.")
+        if not 1 <= max_requests <= 100:
+            raise ValueError("LLM_MAX_REQUESTS должен быть от 1 до 100 на запуск.")
+        if test_expires_at is not None and test_expires_at.utcoffset() is None:
+            raise ValueError("LLM_TEST_EXPIRES_AT должен содержать часовой пояс.")
         self.provider = provider
         self.endpoint = PROVIDERS[provider][0]
         self._api_key = api_key
         self.model = model
         self.timeout = timeout
         self.allow_case_data = allow_case_data
+        self.test_chat_ids = frozenset(int(value) for value in test_chat_ids)
+        self.test_expires_at = test_expires_at
+        self.remaining_requests = max_requests
         self.opener = build_opener(NoRedirects())
 
-    def generate(self, question, profile, evidence, *, obstacle="", is_demo=False):
+    def generate(self, question, profile, evidence, *, obstacle="", is_demo=False, chat_id=None):
         # Enabling an API does not authorize sending the private case catalog.
         if not evidence or (not is_demo and not self.allow_case_data):
+            return None
+        if self.remaining_requests <= 0:
+            return None
+        if self.test_expires_at is not None and datetime.now(UTC) >= self.test_expires_at:
+            return None
+        # Full-catalog Telegram tests are restricted to explicit testers and a time window.
+        # Direct CLI probes have no chat_id and remain separately user-triggered.
+        if not is_demo and chat_id is not None and (
+                chat_id not in self.test_chat_ids or self.test_expires_at is None):
             return None
         candidates = evidence[:3]
         context = {key: redact(profile[key][:100]) for key in ("stage", "sector", "goal")
@@ -108,6 +126,7 @@ class ResponseGenerator:
                           headers={"Authorization": f"Bearer {self._api_key}",
                                    "Content-Type": "application/json"})
         try:
+            self.remaining_requests -= 1
             with self.opener.open(request, timeout=self.timeout) as response:
                 raw = response.read(262145)
             if len(raw) > 262144:
@@ -155,8 +174,12 @@ def generator_from_env(env):
     if provider not in PROVIDERS:
         raise ValueError("LLM_PROVIDER: допустимы none, xai или openrouter.")
     _, key_name, default_model = PROVIDERS[provider]
+    expires = env.get("LLM_TEST_EXPIRES_AT", "").strip()
     return ResponseGenerator(
         provider, env.get(key_name, "").strip(), env.get("LLM_MODEL", "").strip() or default_model,
         timeout=int(env.get("LLM_TIMEOUT_SECONDS", "15")),
         allow_case_data=env.get("LLM_ALLOW_CASE_DATA", "false").strip().lower() in ("1", "true"),
+        test_chat_ids=[value.strip() for value in env.get("LLM_TEST_CHAT_IDS", "").split(",") if value.strip()],
+        test_expires_at=datetime.fromisoformat(expires) if expires else None,
+        max_requests=int(env.get("LLM_MAX_REQUESTS", "30")),
     )

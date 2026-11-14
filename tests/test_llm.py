@@ -194,6 +194,7 @@ class GeneratorTests(unittest.TestCase):
             self.assertIn("По вашей задаче", outbox.messages[-1][0])
             self.assertEqual(state.get(1).proposal["title"], result["action"])
             self.assertEqual(state.get(1).proposal["completion"], result["completion"])
+            self.generator._cache.clear()
             self.generator.opener.open.side_effect = TimeoutError()
             bot.message(1, query)
             self.assertIn("Не удалось подготовить ответ", outbox.messages[-1][0])

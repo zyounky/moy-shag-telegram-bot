@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .advice import STAGES, catalog_context, compose_advice, infer_profile
 from .reminders import resolve_local_time
+from .progress import DraftReply
 
 
 LOG = logging.getLogger(__name__)
@@ -167,9 +168,16 @@ class Assistant:
         if self.chooser:
             evidence = self.chooser.choose(question, context, result.evidence)
         advice = compose_advice(question, evidence, state.profile, obstacle)
+        reply = DraftReply(self.api, chat) if self.generator and callable(getattr(self.api, "edit", None)) else None
+        finish = reply.finish if reply else lambda text, rows=None: self.send(chat, text, rows)
         if self.generator:
             generated = self.generator.generate(question, state.profile, result.evidence,
-                                                obstacle=obstacle, is_demo=self.catalog.is_demo, chat_id=chat)
+                                                obstacle=obstacle, is_demo=self.catalog.is_demo, chat_id=chat,
+                                                on_preview=reply.update if reply else None)
+            LOG.info("Ответ LLM: %s; время %s сек.; первый текст %s сек.; кеш %s",
+                     self.generator.last_status, self.generator.last_metrics.get("total_seconds"),
+                     self.generator.last_metrics.get("first_answer_seconds"),
+                     self.generator.last_metrics.get("cache_hit"))
             if generated:
                 evidence, advice = generated
             else:
@@ -189,7 +197,7 @@ class Assistant:
                         rows.append([link("Открыть материал", item.url)])
                 rows.extend(CONTROLS)
                 self.conversations.save(chat, state)
-                return self.send(chat, "\n\n".join(sections) + _demo_notice(self.catalog), rows)
+                return finish("\n\n".join(sections) + _demo_notice(self.catalog), rows)
         action = self.conversations.new_action(advice.action, advice.passage, advice.url)
         action["source_title"] = advice.title
         action["subject"] = question
@@ -222,7 +230,7 @@ class Assistant:
         rows.append([button("Взять шаг в работу", f"action:take:{action['id']}")])
         self.add_recommendations(result, sections, rows, advice.url, advice.title)
         rows.append(CONTROLS[0])
-        self.send(chat, "\n\n".join(sections) + _demo_notice(self.catalog), rows)
+        finish("\n\n".join(sections) + _demo_notice(self.catalog), rows)
 
     def add_recommendations(self, result, sections, rows, source_url=None, source_title=None):
         seen = {source_url} if source_url else set()

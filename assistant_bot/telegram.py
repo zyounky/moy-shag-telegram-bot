@@ -41,14 +41,20 @@ class Telegram:
             allowed_updates=["message", "callback_query"],
         )
 
-    def send(self, chat_id, text, rows=None):
+    def send(self, chat_id, text, rows=None, *, request_timeout=10):
         payload = {
             "chat_id": chat_id, "text": text, "parse_mode": "HTML",
             "link_preview_options": {"is_disabled": True},
         }
         if rows:
             payload["reply_markup"] = {"inline_keyboard": rows}
-        return self.call("sendMessage", **payload)
+        return self.call("sendMessage", request_timeout=request_timeout, **payload)
+
+    def edit(self, chat_id, message_id, text, rows=None, *, request_timeout=10):
+        payload = {"chat_id": chat_id, "message_id": message_id, "text": text,
+                   "parse_mode": "HTML", "link_preview_options": {"is_disabled": True},
+                   "reply_markup": {"inline_keyboard": rows or []}}
+        return self.call("editMessageText", request_timeout=request_timeout, **payload)
 
     def answer_callback(self, callback_id):
         try:

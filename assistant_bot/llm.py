@@ -243,7 +243,8 @@ class ResponseGenerator:
             raise ValueError("Stream ended before completion")
         return envelope
 
-    def generate(self, question, profile, evidence, *, obstacle="", is_demo=False, chat_id=None, on_preview=None):
+    def generate(self, question, profile, evidence, *, obstacle="", is_demo=False, chat_id=None, on_preview=None,
+                 language="ru"):
         started = monotonic()
         self.last_status = "disabled"
         self.last_clarification = ""
@@ -272,6 +273,9 @@ class ResponseGenerator:
                          for i, item in enumerate(candidates)],
         }
         prompt = COMPACT_PROMPT if self.compact else SYSTEM_PROMPT
+        if language == "en":
+            prompt += ("\nДля этого диалога пиши поля answer, action и completion на английском. "
+                       "Поле quote оставь дословно на языке источника. Все требования к источникам действуют.\n")
         schema = deepcopy(SCHEMA)
         if self.compact:
             for passage in inputs["passages"]:

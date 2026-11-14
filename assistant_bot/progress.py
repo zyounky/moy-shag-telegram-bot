@@ -9,9 +9,10 @@ LOG = logging.getLogger(__name__)
 
 
 class DraftReply:
-    def __init__(self, api, chat):
+    def __init__(self, api, chat, heading="Ответ формируется…"):
         self.api = api
         self.chat = chat
+        self.heading = heading
         self.message_id = None
         self._latest = ""
         self._sent = ""
@@ -39,7 +40,7 @@ class DraftReply:
                 text = self._latest
             if not text or text == self._sent:
                 continue
-            preview = "<i>Ответ формируется…</i>\n\n" + escape(text, quote=False)
+            preview = f"<i>{self.heading}</i>\n\n" + escape(text, quote=False)
             try:
                 with self._io:
                     if self._stop.is_set():

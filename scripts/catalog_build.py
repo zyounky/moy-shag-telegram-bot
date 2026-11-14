@@ -32,6 +32,18 @@ TABLES = {
     "Statuses": ("Id", "Title"),
     "Tags": ("Id", "Title", "IsDeleted"),
     "Topics": ("Id", "Title", "IsPublic", "IsDeleted"),
+    "Documents": ("Id", "Title", "Description", "Url", "StatusId", "Published", "IsDeleted", "NoIndex"),
+    "DocumentEmbedItems": ("DocumentId", "Type", "HtmlContent", "Params", "Order"),
+    "Glossary": ("Id", "Title", "Description", "Url", "StatusId", "Published", "IsDeleted", "NoIndex"),
+    "GlossaryEmbedItems": ("GlossaryId", "Type", "HtmlContent", "Params", "Order"),
+    "Webinars": ("Id", "Title", "Description", "DescriptionExt", "Url", "StatusId", "IsDeleted", "IsClosed", "NoIndex"),
+    "Podcasts": ("Id", "Title", "Description", "DescriptionExt", "Url", "StatusId", "IsDeleted", "IsClosed", "NoIndex", "Cost", "Published"),
+    "Calculators": ("Id", "Title", "Description", "Url", "IsDeleted", "NoIndex"),
+    "Lessons": ("Id", "Title", "Description", "IsGroup", "IsDeleted"),
+    "LessonEmbedItems": ("LessonId", "Type", "HtmlContent", "Params", "Order"),
+    "CourseLessonBindings": ("CourseId", "LessonId", "IsDeleted", "IsClosed", "ClosedUntil"),
+    "CourseSubscriptions": ("CourseId", "SubscriptionId"),
+    "CourseTariffBindings": ("CourseId", "Cost"),
 }
 TABLE_HEADER = re.compile(r'^COPY public\."(\w+)" \((.*)\) FROM stdin;$')
 COPY_ESCAPE = re.compile(r"\\([0-7]{1,3}|x[0-9a-fA-F]{1,2}|.)")
@@ -41,7 +53,7 @@ SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 BLOCKS = HEADINGS | {"p", "li", "div", "section", "blockquote", "br", "tr", "td", "th", "hr"}
 HIDDEN = {"script", "style", "noscript", "svg", "iframe", "template"}
-MAX_PASSAGE_LENGTH = 650
+MAX_PASSAGE_LENGTH = 1600
 
 
 class TextBlocks(HTMLParser):
@@ -167,7 +179,16 @@ def _passages(rows: list[dict[str, str | None]]) -> list[dict[str, str]]:
                 if current:
                     passages.append({"heading": heading, "text": current})
                     current = ""
-                # Do not send half a sentence as factual evidence.
+                # Preserve long source blocks instead of silently deleting them.
+                words = sentence.split()
+                part = ""
+                for word in words:
+                    if part and len(part) + len(word) + 1 > MAX_PASSAGE_LENGTH:
+                        passages.append({"heading": label, "text": part})
+                        part = ""
+                    part = f"{part} {word}".strip()
+                if part:
+                    passages.append({"heading": label, "text": part})
                 continue
             if current and (label != heading or len(current) + len(sentence) + 1 > MAX_PASSAGE_LENGTH):
                 passages.append({"heading": heading, "text": current})
@@ -228,6 +249,7 @@ def extract_records(tables: dict[str, list[dict[str, str | None]]]) -> list[dict
         if label:
             tags[key].add(label)
         records.append({
+            "id": key,
             "title": row["Title"],
             "url": f"{ORIGIN}/articles/{row['Url']}/",
             "kind": "article",
@@ -235,19 +257,98 @@ def extract_records(tables: dict[str, list[dict[str, str | None]]]) -> list[dict
             "description": visible_text(row["CardDescription"] or row["Description"])[:230],
             "tags": sorted(tags[key]),
             "passages": _passages(article_blocks[key]),
+            "published_at": row.get("Published"),
+            "content_scope": "public_text",
         })
+    restricted_courses = {row["CourseId"] for row in tables.get("CourseSubscriptions", [])}
+    restricted_courses.update(row["CourseId"] for row in tables.get("CourseTariffBindings", [])
+                              if float(row.get("Cost") or 0) > 0)
+    course_by_id = {row["Id"]: row for row in tables["Courses"]}
     for row in tables["Courses"]:
         if visible(row):
             records.append({
+                "id": row["Id"],
                 "title": row["Title"],
                 "url": f"{ORIGIN}/courses/{row['Url']}/",
                 "kind": "course",
                 "price": int(row["Cost"] or 0),
                 "description": visible_text(row["Description"])[:200],
                 "tags": sorted(tags[row["Id"]]),
+                "access_type": "paid" if int(row["Cost"] or 0) > 0 else
+                               "subscription" if row["Id"] in restricted_courses else "free",
+                "content_scope": "description",
             })
+
+    def is_public(row, *, status=True):
+        return (row.get("IsDeleted") == "f" and row.get("NoIndex") == "f"
+                and row.get("IsClosed", "f") == "f"
+                and (not status or row.get("StatusId") in published_statuses)
+                and bool(SLUG.fullmatch(row.get("Url") or "")))
+
+    for table, kind, prefix, embed, parent in (
+        ("Documents", "document", "documents", "DocumentEmbedItems", "DocumentId"),
+        ("Glossary", "glossary", "glossary", "GlossaryEmbedItems", "GlossaryId"),
+        ("Webinars", "webinar", "webinars", None, None),
+        ("Podcasts", "podcast", "podcasts", None, None),
+        ("Calculators", "calculator", "calculators", None, None),
+    ):
+        blocks_by_id = defaultdict(list)
+        for block in tables.get(embed, []):
+            if block["Type"] in {"0", "2", "4", "13"}:
+                blocks_by_id[block[parent]].append(block)
+        for row in tables.get(table, []):
+            if not is_public(row, status=table != "Calculators"):
+                continue
+            price = int(row.get("Cost") or 0)
+            description = row.get("Description") or ""
+            # Media descriptions are searchable; they are never presented as transcripts.
+            body = description
+            if kind in {"webinar", "podcast"}:
+                body += " " + (row.get("DescriptionExt") or "")
+            blocks = ([{"Type": "0", "Order": "-1", "HtmlContent": body}]
+                      if body.strip() else []) + blocks_by_id[row["Id"]]
+            records.append({
+                "id": row["Id"], "title": row["Title"], "kind": kind,
+                "url": f"{ORIGIN}/{prefix}/{row['Url']}/", "price": price,
+                "description": visible_text(description)[:320], "tags": sorted(tags[row["Id"]]),
+                "passages": _passages(blocks) if price == 0 else [],
+                "published_at": row.get("Published"),
+                "content_scope": "document_description" if kind == "document" else
+                                 "public_text" if embed else "description",
+            })
+
+    # A free-looking price alone does not authorize lesson text: exclude every
+    # subscription, paid tariff, hidden course, and lesson shared with such a course.
+    bindings = defaultdict(list)
+    for binding in tables.get("CourseLessonBindings", []):
+        bindings[binding["LessonId"]].append(binding)
+    lesson_blocks = defaultdict(list)
+    for block in tables.get("LessonEmbedItems", []):
+        if block["Type"] in {"0", "2", "4", "13"}:
+            lesson_blocks[block["LessonId"]].append(block)
+    for lesson in tables.get("Lessons", []):
+        parents = bindings[lesson["Id"]]
+        if lesson["IsDeleted"] != "f" or lesson["IsGroup"] != "f" or not parents:
+            continue
+        allowed = all(
+            b["IsDeleted"] == b["IsClosed"] == "f" and not b.get("ClosedUntil")
+            and b["CourseId"] in course_by_id and visible(course_by_id[b["CourseId"]])
+            and not int(course_by_id[b["CourseId"]].get("Cost") or 0)
+            and b["CourseId"] not in restricted_courses
+            for b in parents
+        )
+        if not allowed:
+            continue
+        course = course_by_id[parents[0]["CourseId"]]
+        records.append({
+            "id": lesson["Id"], "title": f"{lesson['Title']} · {course['Title']}",
+            "url": f"{ORIGIN}/courses/{course['Url']}/", "kind": "lesson", "price": 0,
+            "description": visible_text(lesson.get("Description"))[:320],
+            "tags": sorted(tags[course["Id"]]), "passages": _passages(lesson_blocks[lesson["Id"]]),
+            "content_scope": "free_lesson", "published_at": course.get("Published"),
+        })
     if not any(record.get("passages") for record in records):
-        raise ValueError("В выгрузке нет текста публичных статей.")
+        raise ValueError("В выгрузке нет разрешённых текстовых материалов.")
     return records
 
 
@@ -302,7 +403,7 @@ def main() -> None:
     paid = sum(record["price"] > 0 for record in records)
     print(
         f"Каталог: {articles} статей ({evidence_articles} с текстом), "
-        f"{len(records) - articles} курсов ({paid} платных). Файл: {args.output}"
+        f"всего {len(records)} материалов ({paid} с положительной ценой). Файл: {args.output}"
     )
 
 

@@ -50,10 +50,13 @@ _NO_AD_MEASUREMENT = re.compile(
 
 def infer_profile(text: str, profile: dict):
     normalized = text.lower()
-    for stage, pattern in STAGE_PATTERNS.items():
-        if re.search(pattern, normalized):
-            profile["stage"] = stage
-            break
+    stages = {
+        stage for stage, pattern in STAGE_PATTERNS.items()
+        for match in re.finditer(pattern, normalized)
+        if not re.search(r"\bне\s+$", normalized[max(0, match.start() - 5):match.start()])
+    }
+    if len(stages) == 1:
+        profile["stage"] = stages.pop()
     for prefix, label in SECTORS.items():
         if re.search(r"\b" + prefix, normalized):
             profile["sector"] = label
@@ -118,6 +121,7 @@ class Advice:
     regulated: bool
     completion: str = ""
     answer: str = ""
+    sources: tuple = ()
 
 
 def compose_advice(query: str, evidence, profile: dict, obstacle: str = "") -> Advice:

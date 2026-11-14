@@ -1,79 +1,66 @@
-"""Local search over visible articles and educational material cards."""
+"""Local Russian morphology, BM25 retrieval and bounded source context."""
 
 from __future__ import annotations
 
 import json
 import math
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
+
+import pymorphy3
 
 
 DEMO_CATALOG = Path(__file__).with_name("demo_catalog.jsonl")
 OFFICIAL_HOST = "kurs.alfabank.ru"
-
-STOP_WORDS = set(
-    "а без бы быть в вам ваш вас ведь во вот все вы где да для до его ее если есть же за и из или им их к как какая "
-    "какие какой ко когда кто куда ли мне мой мы на над надо нас наш не чего него нее нет ни но ну о об один он она "
-    "они от по под пока после при про с свое себя со так такое там те тем то того тоже тут ты у уже чем через что "
-    "чтобы эта эти это этом этот я можно нужно подскажи расскажи объясни помочь помоги пожалуйста делать сделать "
-    "посоветуйте посоветуй начать узнать самом вообще получить хочу планирую собираюсь пожалуйста".split()
-)
-ENDING = re.compile(
-    r"(?:иями|ениями|ями|ами|ение|ения|ению|ыми|ими|ого|его|ому|ему|ать|ить|еть|ую|юю|ая|яя|"
-    r"ое|ее|ые|ие|ой|ей|ий|ый|ов|ев|ам|ям|ах|ях|ом|ем|ою|ею|а|я|ь|й|ы|и|о|е|у|ю)$"
-)
-WORD = re.compile(r"[а-яa-z0-9]+")
-INITIALISM = re.compile(r"\b[А-ЯЁA-Z]{2,5}\b")
-CONCEPT_WORDS = (
-    ("маркетплейс", "маркетплейсы", "селлер"),
-    ("ozon", "озон"),
-    ("wildberries", "вайлдберриз"),
-    ("усн", "упрощенка"),
-    ("аусн", "автоусн"),
-    ("самозанятость", "самозанятый", "нпд"),
-    ("налогообложение", "налог", "налоги", "налоговый"),
-    ("реклама", "рекламный", "продвижение", "продвигать", "маркетинг"),
-    ("сотрудник", "сотрудники", "персонал", "работник", "команда"),
-    ("аренда", "арендовать", "помещение"),
-    ("выручка", "доход"),
-    ("аудитория", "клиенты", "покупатели"),
-    ("регистрация", "зарегистрировать", "оформить"),
-    ("проверить", "проверка", "проверьте", "проверки"),
-)
-SPECIFIC_CONCEPT_WORDS = (
-    ("усн", "упрощенка"),
-    ("аусн", "автоусн"),
-    ("самозанятость", "самозанятый", "нпд"),
-    ("ozon", "озон"),
-    ("wildberries", "вайлдберриз"),
-    ("маркетплейс", "маркетплейсы", "селлер", "ozon", "озон", "wildberries", "вайлдберриз"),
-)
-PROFILE_STAGE_WORDS = {
-    "готовится к запуску": ("запуск", "открытие", "начинающий"),
-    "уже работает": ("работает", "действующий", "действующей", "действующая"),
-    "развивается": ("развитие", "расширение", "рост", "масштабирование"),
+PREFIXES = {"article": "/articles/", "course": "/courses/", "lesson": "/courses/",
+            "document": "/documents/", "glossary": "/glossary/", "webinar": "/webinars/",
+            "podcast": "/podcasts/", "calculator": "/calculators/"}
+MORPH = pymorphy3.MorphAnalyzer()
+WORDS = re.compile(r"[а-яёa-z0-9]+", re.I)
+STOP = set("а без бы быть в вам ваш вас во вот все вы где да для до его ее если есть же за и из или им их к как ко когда кто куда ли мне мой мы на над надо нас наш не него нее нет ни но о об он она они от по под пока после при про с свое себя со так такое там то того тоже тут ты у уже чем что чтобы эта эти это этом этот я можно нужно подскажи расскажи объясни помочь помоги пожалуйста сделать делать посоветуйте начать узнать хочу планирую собираюсь самый свой который какой такой первый один мочь хотеть вопрос понять узнать составить рассчитать провести работать оценить проверить открыть выбрать нужный бизнес дело".split())
+ALIASES = {
+    "озон": "ozon", "вайлдберриз": "wildberries", "wb": "wildberries",
+    "упрощенка": "усн", "автоусн": "аусн", "нпд": "самозанятость",
+    "самозанятый": "самозанятость", "налогообложение": "налог", "налоговый": "налог",
+    "рекламный": "реклама", "продвижение": "реклама", "маркетинг": "реклама",
+    "эффективность": "результат",
+    "покупатель": "клиент", "персонал": "сотрудник", "работник": "сотрудник",
+    "нанять": "найм", "нанимать": "найм", "рекрутинг": "найм",
+    "зарегистрироваться": "регистрация", "зарегистрировать": "регистрация",
+    "конкурентный": "конкурент", "денежный": "деньги", "средство": "деньги",
+    "директ": "direct",
 }
+SPECIFIC = {"ozon", "wildberries", "усн", "аусн", "ндс", "ндфл", "самозанятость", "яндекс", "direct"}
 
 
-def _stem(word: str) -> str:
-    if len(word) <= 4 or not re.fullmatch(r"[а-я]+", word):
-        return word
-    stem = ENDING.sub("", word)
-    return stem if len(stem) >= 3 else word
+@lru_cache(maxsize=100000)
+def _lemma(word):
+    word = word.casefold().replace("ё", "е")
+    normal = MORPH.parse(word)[0].normal_form if re.fullmatch(r"[а-я]+", word) else word
+    return ALIASES.get(normal, ALIASES.get(word, normal))
 
 
-def _terms(text: str) -> frozenset[str]:
-    words = WORD.findall(text.casefold().replace("ё", "е"))
-    return frozenset(_stem(word) for word in words if word not in STOP_WORDS and len(word) >= 2)
+def _tokens(text):
+    text = re.sub(r"бизнес[\s-]+план\w*", "бизнесплан", text, flags=re.I)
+    text = re.sub(r"денежн\w*\s+поток\w*|cash\s*flow", "cashflow", text, flags=re.I)
+    return [_lemma(word) for word in WORDS.findall(text)
+            if len(word) >= 2 and word.casefold().replace("ё", "е") not in STOP
+            and _lemma(word) not in STOP]
 
 
-CONCEPTS = tuple(frozenset(_stem(word) for word in group) for group in CONCEPT_WORDS)
-SPECIFIC_CONCEPTS = tuple(frozenset(_stem(word) for word in group) for group in SPECIFIC_CONCEPT_WORDS)
-MARKETPLACE_CONCEPT = SPECIFIC_CONCEPTS[-1]
-TAX_TERMS = _terms("налог налоги налоговый налогообложение")
+def _query_tokens(text):
+    tokens = set(_tokens(text))
+    if "сотрудник" in tokens and ("удержать" in tokens or "текучесть" in tokens):
+        tokens.update(("увольняться", "мотивация", "текучесть"))
+    if "сотрудник" in tokens and "найм" in tokens:
+        tokens.update(("привлечь", "оформить"))
+    if "окупаться" in tokens:
+        tokens.update(("окупаемость", "эффективность"))
+    return tokens
 
 
 @dataclass(frozen=True)
@@ -82,6 +69,9 @@ class Evidence:
     url: str
     passage: str
     heading: str = ""
+    kind: str = "article"
+    content_scope: str = "public_text"
+    material_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -93,10 +83,11 @@ class Material:
     description: str
     reason: str
     price: int = 0
+    access_type: str = "free"
 
     @property
-    def is_paid(self) -> bool:
-        return self.price > 0
+    def is_paid(self):
+        return self.price > 0 or self.access_type != "free"
 
 
 @dataclass(frozen=True)
@@ -106,180 +97,170 @@ class SearchResult:
     needs_clarification: bool = False
 
 
-@dataclass(frozen=True)
-class _Passage:
-    heading: str
-    text: str
-    terms: frozenset[str]
-    heading_terms: frozenset[str]
-
-
-@dataclass(frozen=True)
-class _Document:
-    title: str
-    url: str
-    kind: str
-    price: int
-    description: str
-    title_terms: frozenset[str]
-    metadata_terms: frozenset[str]
-    terms: frozenset[str]
-    passages: tuple[_Passage, ...]
-
-
-def _parse_document(value: dict, *, is_demo: bool) -> _Document:
-    title, url, kind, price = (value[key] for key in ("title", "url", "kind", "price"))
-    if kind not in {"article", "course"} or type(price) is not int or price < 0 or not title:
-        raise ValueError("Некорректная карточка в каталоге.")
-    if is_demo:
-        if url:
-            raise ValueError("У учебной карточки не должно быть внешней ссылки.")
-    else:
-        parsed = urlsplit(url)
-        expected_prefix = "/articles/" if kind == "article" else "/courses/"
-        if parsed.scheme != "https" or parsed.netloc != OFFICIAL_HOST or not parsed.path.startswith(expected_prefix):
-            raise ValueError("Карточка должна вести на официальную страницу Альфа-Курса.")
-
-    description = value.get("description", "")
-    title_terms = _terms(title)
-    metadata_terms = _terms(" ".join([title, description, *value.get("tags", [])]))
-    # Full text is searchable only for public, free articles.
-    passages = tuple(
-        _Passage(p.get("heading", ""), p["text"], _terms(p["text"]), _terms(p.get("heading", "")))
-        for p in value.get("passages", [])
-    ) if kind == "article" and price == 0 else ()
-    terms = metadata_terms.union(*(p.terms | p.heading_terms for p in passages))
-    return _Document(title, url, kind, price, description, title_terms, metadata_terms, terms, passages)
-
-
 class Catalog:
-    def __init__(self, path: str | Path):
-        path = Path(path)
-        with path.open(encoding="utf-8") as file:
-            first_line = file.readline()
-            if not first_line:
-                raise ValueError("Файл каталога пуст.")
-            header = json.loads(first_line)
-            if header.get("format") != 1 or header.get("mode") not in {"case", "demo"}:
-                raise ValueError("Формат каталога не поддерживается. Пересоберите его через catalog_build.py.")
+    def __init__(self, path):
+        with Path(path).open(encoding="utf-8") as source:
+            header = json.loads(source.readline())
+            if header.get("format") != 1 or header.get("mode") not in {"demo", "case"}:
+                raise ValueError("Формат каталога не поддерживается.")
             self.is_demo = header["mode"] == "demo"
-            self._documents = tuple(
-                _parse_document(json.loads(line), is_demo=self.is_demo) for line in file if line.strip()
-            )
-        if not self._documents:
+            rows = [json.loads(line) for line in source if line.strip()]
+        if not rows:
             raise ValueError("В каталоге отсутствуют материалы.")
-        document_frequency = Counter(term for doc in self._documents for term in doc.terms)
-        self._weights = {
-            term: 1 + math.log((len(self._documents) + 1) / (count + 1))
-            for term, count in document_frequency.items()
-        }
-        self.article_count = sum(bool(doc.passages) for doc in self._documents)
-        self.material_count = len(self._documents)
+        self._docs = []
+        self._chunks = []
+        self._postings = defaultdict(set)
+        self._df = Counter()
+        for row in rows:
+            kind, url, price = row["kind"], row["url"], row["price"]
+            if kind not in PREFIXES or type(price) is not int or price < 0 or not row.get("title"):
+                raise ValueError("Некорректная карточка в каталоге.")
+            parsed = urlsplit(url)
+            if (self.is_demo and url) or (not self.is_demo and (
+                    parsed.scheme != "https" or parsed.netloc != OFFICIAL_HOST
+                    or not parsed.path.startswith(PREFIXES[kind]))):
+                raise ValueError("Карточка должна вести на официальную страницу Альфа-Курса.")
+            access = row.get("access_type", "paid" if price else "free")
+            # A zero price is not enough: subscription text is excluded too.
+            allowed = kind != "course" and access == "free" and price == 0
+            passages = row.get("passages", []) if allowed else []
+            doc_id = len(self._docs)
+            title = Counter(_tokens(row["title"]))
+            meta = Counter(_tokens(" ".join([row["title"], row.get("description", ""), *row.get("tags", [])])))
+            doc = {"row": row, "title": title, "meta": meta, "terms": set(meta), "chunks": []}
+            for passage in passages:
+                text = passage.get("text", "").strip()
+                if not text:
+                    continue
+                terms = Counter(_tokens(text))
+                heading = Counter(_tokens(passage.get("heading", "")))
+                chunk_id = len(self._chunks)
+                doc["chunks"].append(chunk_id)
+                doc["terms"].update(terms)
+                doc["terms"].update(heading)
+                self._chunks.append({"doc": doc_id, "text": text, "heading": passage.get("heading", ""),
+                                     "terms": terms, "head_terms": heading, "length": sum(terms.values())})
+                for term in terms.keys() | heading.keys() | title.keys():
+                    self._postings[term].add(chunk_id)
+            self._df.update(doc["terms"])
+            self._docs.append(doc)
+        self._avg_length = sum(c["length"] for c in self._chunks) / max(1, len(self._chunks))
+        self.article_count = sum(d["row"]["kind"] == "article" and bool(d["chunks"]) for d in self._docs)
+        self.text_material_count = sum(bool(d["chunks"]) for d in self._docs)
+        self.material_count = len(self._docs)
+        self.kind_counts = dict(Counter(d["row"]["kind"] for d in self._docs))
 
-    def _match(self, query: frozenset[str], terms: frozenset[str]) -> tuple[float, int]:
-        exact = query & terms
-        weight = sum(min(self._weights.get(term, 1.0), 4.0) for term in sorted(exact))
-        concepts = sum(
-            bool((query - exact) & group and not exact & group and terms & group)
-            for group in CONCEPTS
-        )
-        return weight + concepts * 0.7, len(exact) + concepts
+    def _idf(self, term):
+        count = self._df.get(term, 0)
+        return math.log(1 + (len(self._docs) - count + .5) / (count + .5))
 
-    def search(self, query: str, context: dict[str, str] | None = None) -> SearchResult:
-        query_terms = _terms(query)
-        if not query_terms:
+    def _score(self, query, counts, length=None):
+        length = sum(counts.values()) if length is None else length
+        norm = 1.2 * (.25 + .75 * length / max(1, self._avg_length))
+        return sum(self._idf(t) * counts[t] * 2.2 / (counts[t] + norm)
+                   for t in query if counts.get(t))
+
+    def _packet(self, doc, ranked_chunks, broad):
+        best = ranked_chunks[0][1]
+        ids = doc["chunks"]
+        pos = ids.index(best)
+        selected = list(dict.fromkeys(([ids[0]] if broad else []) +
+                                     [best] + ids[max(0, pos - 1):pos + 3]))
+        parts = []
+        size = 0
+        for chunk_id in selected:
+            text = self._chunks[chunk_id]["text"]
+            if text in parts or size + len(text) + 2 > 3600:
+                continue
+            parts.append(text)
+            size += len(text) + 2
+        row = doc["row"]
+        return Evidence(row["title"], row["url"], "\n\n".join(parts),
+                        self._chunks[best]["heading"], row["kind"],
+                        row.get("content_scope", "public_text"), row.get("id", ""))
+
+    def search(self, query, context=None):
+        original = set(_tokens(query))
+        if "сотрудник" in original and "удержать" in original:
+            original.remove("удержать")
+            original.add("увольняться")
+        query_sector = original & {"кофейня", "кафе", "магазин", "салон", "студия"}
+        if len(original - query_sector) >= 2:
+            original -= query_sector
+        terms = _query_tokens(query)
+        terms.update(original)
+        if not terms:
             return SearchResult(needs_clarification=True)
         context = context or {}
-        sector_terms = _terms(context.get("sector", "")) if isinstance(context.get("sector"), str) else frozenset()
-        context_terms = _terms(" ".join(
-            value for value in context.values() if isinstance(value, str)
-        )) - query_terms
-        stage_terms = _terms(" ".join(PROFILE_STAGE_WORDS.get(context.get("stage", ""), ())))
-        relevant_concepts = tuple(group for group in SPECIFIC_CONCEPTS if query_terms & group)
-        uncommon_initialisms = {
-            term for term in _terms(" ".join(INITIALISM.findall(query)))
-            if self._weights.get(term, 7) > 5.7
-        }
-        is_marketplace_tax_query = (
-            bool(query_terms & MARKETPLACE_CONCEPT)
-            and bool(query_terms & (SPECIFIC_CONCEPTS[0] | TAX_TERMS))
-        )
-        evidence = []
+        specific = original & SPECIFIC
+        define = bool(re.search(r"что такое|что значит|объясни|определение", query, re.I))
+        candidates = set().union(*(self._postings.get(t, set()) for t in terms))
+        chunk_scores = defaultdict(list)
+        for chunk_id in candidates:
+            chunk = self._chunks[chunk_id]
+            doc = self._docs[chunk["doc"]]
+            if specific - doc["terms"]:
+                continue
+            score = self._score(terms, chunk["terms"], chunk["length"])
+            score += 1.5 * self._score(terms, chunk["head_terms"])
+            chunk_scores[chunk["doc"]].append((score, chunk_id))
+        ranked = []
         cards = []
-        min_matches = min(len(query_terms), max(2, math.ceil(len(query_terms) * 0.5)))
-
-        for doc in self._documents:
-            title_score, title_count = self._match(query_terms, doc.title_terms)
-            metadata_score, metadata_count = self._match(query_terms, doc.metadata_terms)
-            context_score, _ = self._match(context_terms, doc.metadata_terms)
-            context_bonus = min(context_score, 9.0) * 0.6
-            best_passage = None
-            if uncommon_initialisms - doc.terms:
+        original_weight = sum(self._idf(t) for t in original) or 1
+        sector = set(_tokens(context.get("sector", ""))) | query_sector
+        stage = context.get("stage", "")
+        stage_terms = set(_tokens({"готовится к запуску": "запуск открытие начинающий",
+                                  "уже работает": "действующий работает", "развивается": "развитие масштабирование"}.get(stage, "")))
+        for doc_id, doc in enumerate(self._docs):
+            if specific - doc["terms"]:
                 continue
-            for passage in doc.passages:
-                body_score, body_count = self._match(query_terms, passage.terms)
-                heading_score, _ = self._match(query_terms, passage.heading_terms)
-                combined_terms = passage.terms | passage.heading_terms | doc.title_terms
-                if uncommon_initialisms - combined_terms:
-                    continue
-                if any(not group & combined_terms for group in relevant_concepts):
-                    continue
-                if is_marketplace_tax_query and not TAX_TERMS & (passage.heading_terms | doc.title_terms):
-                    continue
-                _, combined_count = self._match(query_terms, combined_terms)
-                exact_count = len(query_terms & combined_terms)
-                if not body_count or combined_count < min_matches or exact_count < min_matches - 1:
-                    continue
-                score = (
-                    body_score * 2.0 + heading_score + title_score * 1.8 + metadata_score * 0.35
-                    + combined_count * 1.15 + context_bonus
-                )
-                if stage_terms & doc.metadata_terms and title_count >= 2:
-                    score += 4.0
-                if best_passage is None or score > best_passage[0]:
-                    best_passage = (score, passage)
-            if best_passage:
-                score, passage = best_passage
-                evidence.append((score, Evidence(doc.title, doc.url, passage.text, passage.heading)))
-            if not best_passage and (
-                uncommon_initialisms - doc.metadata_terms
-                or any(not group & doc.metadata_terms for group in relevant_concepts)
-            ):
+            coverage = sum(self._idf(t) for t in original & doc["terms"]) / original_weight
+            if coverage < .55:
                 continue
-            if is_marketplace_tax_query and not TAX_TERMS & doc.metadata_terms:
+            title_coverage = sum(self._idf(t) for t in original & doc["title"].keys()) / original_weight
+            chunks = sorted(chunk_scores.get(doc_id, []), reverse=True)
+            best = chunks[0][0] if chunks else 0
+            score = 3.0 * self._score(terms, doc["title"]) + .5 * self._score(terms, doc["meta"]) + best
+            score *= .5 + coverage
+            score += 5 * title_coverage
+            score += min(2, len(sector & doc["meta"].keys()))
+            score += 4 * len(specific & doc["title"].keys())
+            score += 4 if stage_terms & doc["meta"].keys() else 0
+            if define and doc["row"]["kind"] == "glossary":
+                score += 8 * title_coverage
+            if "найм" in terms and "сотрудник" in terms and "найм" in doc["title"]:
+                score += 5
+            if "удержать" in original and "сотрудник" in original and "увольняться" in doc["title"]:
+                score += 10
+            if chunks:
+                ranked.append((score, doc_id, chunks, title_coverage >= .8))
+            if score > 0:
+                cards.append((score, doc_id))
+        ranked.sort(key=lambda item: (-item[0], self._docs[item[1]]["row"]["title"]))
+        evidence = []
+        seen = set()
+        for _, doc_id, chunks, broad in ranked:
+            doc = self._docs[doc_id]
+            key = doc["row"]["url"] or doc["row"]["title"]
+            if key not in seen:
+                evidence.append(self._packet(doc, chunks, broad))
+                seen.add(key)
+            if len(evidence) == 3:
+                break
+        cards.sort(reverse=True)
+        selected = []
+        selected_kinds = set()
+        for _, doc_id in cards:
+            row = self._docs[doc_id]["row"]
+            access = row.get("access_type", "paid" if row["price"] else "free")
+            group = "paid" if access != "free" else "course" if row["kind"] == "course" else "text"
+            if group in selected_kinds:
                 continue
-            if doc.price and (title_count < 2 or len(query_terms & doc.metadata_terms) < 2):
-                continue
-            if metadata_count >= min_matches or best_passage:
-                score = metadata_score + title_score * 2.2 + context_bonus
-                if stage_terms & doc.metadata_terms and title_count >= 2:
-                    score += 4.0
-                if best_passage:
-                    score += best_passage[0] * 0.4
-                if score:
-                    cards.append((score, doc))
-
-        evidence.sort(key=lambda item: (-item[0], item[1].title))
-        cards.sort(key=lambda item: (-item[0], item[1].title))
-        best_evidence = tuple(item[1] for item in evidence[:2])
-        selected = [
-            next((item[1] for item in cards if item[1].kind == "article"), None),
-            next((item[1] for item in cards if item[1].kind == "course" and not item[1].price), None),
-            next((item[1] for item in cards if item[1].kind == "course" and item[1].price), None),
-        ]
-        recommendations = tuple(
-            Material(
-                doc.title,
-                doc.url,
-                doc.kind,
-                f"{doc.price:,} ₽".replace(",", " ") if doc.price else "Бесплатно",
-                doc.description,
-                "Подходит к текущему этапу бизнеса." if doc.metadata_terms & stage_terms
-                else "Есть материал для вашей сферы." if doc.metadata_terms & sector_terms
-                else "Подходит к теме запроса.",
-                doc.price,
-            )
-            for doc in selected if doc is not None
-        )
-        # A one-word subject can start a consultation, but the goal needs clarification.
-        return SearchResult(best_evidence, recommendations, needs_clarification=len(query_terms) == 1)
+            selected_kinds.add(group)
+            price = row["price"]
+            price_display = f"{price:,} ₽".replace(",", " ") if price else "По подписке" if access == "subscription" else "Бесплатно"
+            reason = "Подходит к текущему этапу бизнеса." if stage_terms & self._docs[doc_id]["meta"].keys() else "Подходит к теме запроса."
+            selected.append(Material(row["title"], row["url"], row["kind"], price_display,
+                                     row.get("description", ""), reason, price, access))
+        vague = len(original) == 1 and not define and len(WORDS.findall(query)) <= 2
+        return SearchResult(tuple(evidence), tuple(selected), vague)

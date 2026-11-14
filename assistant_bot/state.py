@@ -12,6 +12,7 @@ class Conversation:
     pending: dict = field(default_factory=dict)
     action: dict = field(default_factory=dict)
     proposal: dict = field(default_factory=dict)
+    topic: str = ""
 
 
 class ConversationStore:

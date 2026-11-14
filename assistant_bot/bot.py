@@ -82,11 +82,12 @@ class Assistant:
         verb = text.split(maxsplit=1)[0].split("@", 1)[0].lower() if text else ""
         if verb == "/start" or verb == "/help":
             state.pending.clear()
+            state.topic = ""
             self.conversations.save(chat, state)
             self.send(chat, "<b>Помощник «Альфа-Курса»</b>\n"
                             "Опишите задачу своими словами. Я найду подходящий материал "
                             "и помогу выбрать, что делать дальше.\n\n"
-                            "Например: «Как оценить эффективность рекламы кофейни?»"
+                            "Например: «Как составить бизнес-план?» или «Что такое NPS?»"
                             + _demo_notice(self.catalog), CONTROLS)
         elif verb == "/cancel":
             state.pending.clear()
@@ -113,7 +114,11 @@ class Assistant:
             question = query if obstacle else f"{query}. {text}"[:600]
             self.answer(chat, state, question, clarified=True, obstacle=obstacle)
         else:
-            self.answer(chat, state, text[:600])
+            followup = bool(re.match(
+                r"^(?:а\s+(?:если|как|что|почему)|как\s+это|что\s+это|объясни\s+подробнее|"
+                r"подробнее\b|не\s+получилось|у\s+меня\s+нет|нет\s+данных)", text, re.I))
+            question = f"{state.topic}\nУточнение: {text}"[:750] if state.topic and followup else text[:600]
+            self.answer(chat, state, question)
 
     def show_profile(self, chat, state):
         context = catalog_context(state.profile)
@@ -138,6 +143,8 @@ class Assistant:
         if not question:
             return self._clarify(chat, state, "")
         infer_profile(question, state.profile)
+        if "\nУточнение:" not in question:
+            state.topic = question
         context = catalog_context(state.profile)
         result = self.catalog.search(question, context)
         if obstacle:
@@ -165,6 +172,24 @@ class Assistant:
                                                 obstacle=obstacle, is_demo=self.catalog.is_demo, chat_id=chat)
             if generated:
                 evidence, advice = generated
+            else:
+                status = self.generator.last_status
+                if status == "insufficient":
+                    text = ("В найденных материалах недостаточно сведений для уверенного ответа. "
+                            + (self.generator.last_clarification or "Уточните, какой результат хотите получить."))
+                elif status in {"disabled", "expired", "budget"}:
+                    text = "Сейчас доступна подборка материалов; консультация модели для этого чата не активна."
+                else:
+                    text = "Не удалось подготовить ответ. Попробуйте ещё раз; подходящие материалы доступны ниже."
+                sections = [text]
+                rows = []
+                for item in result.evidence[:2]:
+                    sections.append(f"<b>{h(item.title)}</b>")
+                    if item.url:
+                        rows.append([link("Открыть материал", item.url)])
+                rows.extend(CONTROLS)
+                self.conversations.save(chat, state)
+                return self.send(chat, "\n\n".join(sections) + _demo_notice(self.catalog), rows)
         action = self.conversations.new_action(advice.action, advice.passage, advice.url)
         action["source_title"] = advice.title
         action["subject"] = question
@@ -182,13 +207,18 @@ class Assistant:
             sections.append(f"Уточнение к шагу: {h(obstacle[:130])}")
         if advice.answer:
             sections.append(f"<b>По вашей задаче</b>\n{h(advice.answer)}")
-        sections += [f"<b>Что нашёл в «Альфа-Курсе»</b>\n<i>{source}</i>\n{h(advice.passage)}",
-                     f"<b>Что сделать дальше</b>\n{h(advice.action)}"]
+            sections.append("<b>Источники</b>\n" + "\n".join(h(title) for title, _ in advice.sources))
+        else:
+            sections.append(f"<b>Что нашёл в «Альфа-Курсе»</b>\n<i>{source}</i>\n{h(advice.passage)}")
+        sections.append(f"<b>Что сделать дальше</b>\n{h(advice.action)}")
         if advice.completion:
             sections.append(f"<b>Как проверить результат</b>\n{h(advice.completion)}")
         if advice.regulated:
             sections.append("Источник может описывать правила за прошлый период.")
         rows = [[link("Открыть источник", advice.url)]] if advice.url else []
+        for title, url in advice.sources:
+            if url and url != advice.url and all(row[0].get("url") != url for row in rows):
+                rows.append([link("Источник: " + title[:35], url)])
         rows.append([button("Взять шаг в работу", f"action:take:{action['id']}")])
         self.add_recommendations(result, sections, rows, advice.url, advice.title)
         rows.append(CONTROLS[0])

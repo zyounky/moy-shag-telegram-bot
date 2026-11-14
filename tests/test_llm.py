@@ -21,7 +21,7 @@ EVIDENCE = Evidence("Результат рекламы", "https://kurs.alfabank.
 
 
 def valid_result():
-    return {"status": "answered", "source_index": 0, "quote": QUOTE,
+    return {"status": "answered", "source_index": 0, "source_indices": [0], "quote": QUOTE,
             "answer": "Стоимость заказа можно оценить по расходам и числу заказов.",
             "action": "Разделите расходы на рекламу на число заказов за тот же период.",
             "completion": "Записаны расходы, число заказов и стоимость одного заказа."}
@@ -79,7 +79,9 @@ class GeneratorTests(unittest.TestCase):
                    {**valid_result(), "answer": "Смотрите https://example.org/"},
                    {**valid_result(), "action": "<b>Сделайте</b>"},
                    {**valid_result(), "completion": ""},
-                   {**valid_result(), "answer": "я" * 651},
+                   {**valid_result(), "answer": "я" * 1601},
+                   {**valid_result(), "source_indices": [0, 9]},
+                   {**valid_result(), "source_indices": [0, 0]},
                    {**valid_result(), "extra": "unexpected"},
                    {**valid_result(), "status": "insufficient"}]
         for result in invalid:
@@ -101,6 +103,21 @@ class GeneratorTests(unittest.TestCase):
     def test_no_evidence_means_no_request(self):
         self.assertIsNone(self.generator.generate("Вопрос", {}, (), is_demo=True))
         self.generator.opener.open.assert_not_called()
+
+    def test_multiple_sources_are_validated_and_mapped_to_catalog_links(self):
+        second = Evidence("Второй материал", "https://kurs.alfabank.ru/articles/second/", QUOTE)
+        result = {**valid_result(), "source_indices": [0, 1]}
+        self.generator.opener.open.return_value = response_for(result)
+        generated = self.generator.generate("Реклама", {}, (EVIDENCE, second), is_demo=True)
+        self.assertEqual(generated[1].sources, ((EVIDENCE.title, EVIDENCE.url), (second.title, second.url)))
+
+    def test_insufficient_answer_is_distinct_from_network_failure(self):
+        result = {**valid_result(), "status": "insufficient", "source_indices": [],
+                  "answer": "Какой показатель вы хотите оценить?", "quote": "", "action": "", "completion": ""}
+        self.generator.opener.open.return_value = response_for(result)
+        self.assertIsNone(self.generate(is_demo=True))
+        self.assertEqual(self.generator.last_status, "insufficient")
+        self.assertIn("показатель", self.generator.last_clarification)
 
     def test_case_telegram_requests_require_tester_and_unexpired_session(self):
         self.generator.allow_case_data = True
@@ -179,5 +196,6 @@ class GeneratorTests(unittest.TestCase):
             self.assertEqual(state.get(1).proposal["completion"], result["completion"])
             self.generator.opener.open.side_effect = TimeoutError()
             bot.message(1, query)
-            self.assertIn("Что нашёл", outbox.messages[-1][0])
+            self.assertIn("Не удалось подготовить ответ", outbox.messages[-1][0])
             self.assertNotIn("По вашей задаче", outbox.messages[-1][0])
+            self.assertNotIn("Что нашёл", outbox.messages[-1][0])

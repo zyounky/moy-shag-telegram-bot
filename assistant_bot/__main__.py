@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import os
 import re
@@ -108,7 +109,8 @@ def main():
         chooser = LocalReranker(model_url, os.getenv("OLLAMA_MODEL", "").strip()) if model_url else None
         if args.check:
             make_assistant(Console(), catalog, state_path)
-            print(f"Каталог и SQLite готовы. Статьи: {catalog.article_count}, материалы: {catalog.material_count}.")
+            print(f"Каталог и SQLite готовы. Материалы: {catalog.material_count}; с текстом: {catalog.text_material_count}.")
+            print("Типы: " + json.dumps(catalog.kind_counts, ensure_ascii=False))
             return 0
         generator = generator_from_env(os.environ)
         if generator:

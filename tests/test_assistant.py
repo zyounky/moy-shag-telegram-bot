@@ -41,6 +41,21 @@ class AssistantTest(unittest.TestCase):
     def click(self, label, chat=1):
         self.bot.callback(chat, self.emitted.button(label))
 
+    def test_plain_followup_keeps_topic_and_new_question_replaces_it(self):
+        queries = []
+        original = self.catalog.search
+        self.catalog.search = lambda query, context: (queries.append(query) or original(query, context))
+        self.bot.message(1, "Как оценить эффективность рекламы кофейни?")
+        self.bot.message(1, "А если нет данных по кампании?")
+        self.assertIn("эффективность рекламы", queries[-1])
+        self.assertIn("Уточнение:", queries[-1])
+        self.bot.message(1, "Как проверить спрос кофейни?")
+        self.assertNotIn("эффективность рекламы", queries[-1])
+
+    def test_negated_launch_statement_does_not_override_operating_business(self):
+        self.bot.message(1, "Я не планирую открыть кофейню, она уже работает. Как оценить эффективность рекламы?")
+        self.assertEqual(self.conversations.get(1).profile["stage"], "operate")
+
     def test_personalized_action_survives_followup_and_closes_its_own_schedule(self):
         self.bot.callback(1, "stage:launch")
         self.bot.callback(2, "stage:operate")

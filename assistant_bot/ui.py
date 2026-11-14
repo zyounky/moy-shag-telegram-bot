@@ -1,6 +1,8 @@
 """English copy for Telegram screens and controls. Catalog content is separate."""
 
 ENGLISH = {
+    "Уберите ФИО, адреса и личные документы из сообщения. Опишите бизнес-задачу без персональных данных.": "Remove names, addresses and personal documents. Describe the business question without personal data.",
+    "Сейчас много запросов. Дождитесь ответа на предыдущие сообщения и попробуйте ещё раз.": "There are too many requests. Wait for your previous replies and try again.",
     "Задать вопрос": "Ask a question",
     "Мой шаг": "My next step",
     "Напоминания": "Reminders",

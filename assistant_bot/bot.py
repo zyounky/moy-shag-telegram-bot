@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .advice import STAGES, catalog_context, compose_advice, infer_profile
 from .progress import DraftReply
+from .privacy import has_personal_disclosure
 from .query_language import russian_search_query
 from .reminders import resolve_local_time
 from .ui import SCREENS, text as ui_text
@@ -50,6 +51,17 @@ def link(label: str, url: str) -> dict:
 
 def h(text) -> str:
     return escape(str(text), quote=False)
+
+
+def continued_question(question, reply):
+    base, separator, previous = question.partition("\nУточнение:")
+    details = (previous.strip() + "\n" + reply).strip() if separator else reply
+    return base[:360] + "\nУточнение:\n" + details[-370:]
+
+
+def is_new_question(text):
+    return bool(re.match(r"^(?:как\b|что такое\b|почему\b|где\b|когда\b|сколько\b|"
+                         r"how\b|what (?:is|are)\b|why\b|where\b|when\b)", text, re.I))
 
 
 def _format_local(timestamp: datetime, timezone: str, language: str) -> str:
@@ -108,7 +120,8 @@ class Assistant:
         if callback:
             message = callback.get("message", {})
             chat = message.get("chat", {})
-            self.api.answer_callback(callback["id"])
+            if not update.get("_callback_acknowledged"):
+                self.api.answer_callback(callback["id"])
             if chat.get("type") == "private":
                 self.callback(chat["id"], callback.get("data", ""))
             return
@@ -120,6 +133,8 @@ class Assistant:
     def message(self, chat: int, text: str, *, require_language=False):
         state = self.conversations.get(chat)
         verb = text.split(maxsplit=1)[0].split("@", 1)[0].lower() if text else ""
+        if not verb.startswith("/") and has_personal_disclosure(text):
+            return self.send(chat, "Уберите ФИО, адреса и личные документы из сообщения. Опишите бизнес-задачу без персональных данных.", CONTROLS)
         if not state.language and not any((state.profile, state.action, state.proposal, state.topic)):
             choosing = state.pending.get("kind") == "language"
             needs_choice = verb in ("/start", "/menu") or (
@@ -159,18 +174,21 @@ class Assistant:
         elif state.pending.get("kind") == "reminder":
             self.reminder_text(chat, state, text)
         elif state.pending.get("kind") in ("clarify", "obstacle"):
-            obstacle = text if state.pending["kind"] == "obstacle" else ""
+            is_obstacle = state.pending["kind"] == "obstacle"
+            obstacle = text if is_obstacle else state.pending.get("obstacle", "")
             query = state.pending["query"]
             state.pending.clear()
             infer_profile(russian_search_query(text), state.profile)
-            question = query if obstacle else f"{query}\n{text}"[:600]
+            if not is_obstacle and is_new_question(text):
+                return self.answer(chat, state, text[:600])
+            question = query if is_obstacle else continued_question(query, text)
             self.answer(chat, state, question, clarified=True, obstacle=obstacle)
         else:
             followup = bool(re.match(
                 r"^(?:а\s+(?:если|как|что|почему)|как\s+это|что\s+это|объясни\s+подробнее|"
                 r"подробнее\b|не\s+получилось|у\s+меня\s+нет|нет\s+данных|"
                 r"what if\b|how about\b|tell me more\b|i (?:don't|don’t|do not) have\b)", text, re.I))
-            question = f"{state.topic}\nУточнение:\n{text}"[:750] if state.topic and followup else text[:600]
+            question = continued_question(state.topic, text) if state.topic and followup else text[:600]
             self.answer(chat, state, question)
 
     def show_profile(self, chat, state):
@@ -248,10 +266,13 @@ class Assistant:
             else:
                 status = self.generator.last_status
                 if status == "insufficient":
+                    state.pending = {"kind": "clarify", "query": question, "obstacle": obstacle}
                     text = (t("В найденных материалах недостаточно сведений для уверенного ответа.") + " "
                             + (h(self.generator.last_clarification) or t("Уточните, какой результат хотите получить.")))
                 elif status in {"disabled", "expired", "budget"}:
                     text = t("Сейчас доступна подборка материалов; консультация модели для этого чата не активна.")
+                elif status == "privacy":
+                    text = t("Уберите ФИО, адреса и личные документы из сообщения. Опишите бизнес-задачу без персональных данных.")
                 else:
                     text = t("Не удалось подготовить ответ. Попробуйте ещё раз; подходящие материалы доступны ниже.")
                 sections = [text]
@@ -260,6 +281,17 @@ class Assistant:
                     sections.append(f"<b>{h(item.title)}</b>")
                     if item.url:
                         rows.append([link("Открыть материал", item.url)])
+                self.add_recommendations(result, sections, rows, t)
+                unique_rows = []
+                seen_urls = set()
+                for row in rows:
+                    url = row[0].get("url") if len(row) == 1 else None
+                    if url and url in seen_urls:
+                        continue
+                    if url:
+                        seen_urls.add(url)
+                    unique_rows.append(row)
+                rows = unique_rows
                 rows.extend(CONTROLS)
                 self.conversations.save(chat, state)
                 return finish("\n\n".join(sections), rows)

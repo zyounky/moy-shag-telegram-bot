@@ -10,11 +10,13 @@ from collections import OrderedDict
 from dataclasses import replace
 from datetime import UTC, datetime
 from time import monotonic
+from threading import RLock, local
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .advice import compose_advice
 from .budget import reserve_request
+from .privacy import has_personal_disclosure
 
 
 LOG = logging.getLogger(__name__)
@@ -165,6 +167,30 @@ def answer_preview(text, candidates):
 
 
 class ResponseGenerator:
+    @property
+    def last_status(self):
+        return getattr(self._request_local, "status", "not_called")
+
+    @last_status.setter
+    def last_status(self, value):
+        self._request_local.status = value
+
+    @property
+    def last_clarification(self):
+        return getattr(self._request_local, "clarification", "")
+
+    @last_clarification.setter
+    def last_clarification(self, value):
+        self._request_local.clarification = value
+
+    @property
+    def last_metrics(self):
+        return getattr(self._request_local, "metrics", {})
+
+    @last_metrics.setter
+    def last_metrics(self, value):
+        self._request_local.metrics = value
+
     def __init__(self, provider, api_key, model, *, timeout=30, allow_case_data=False,
                  test_chat_ids=(), test_expires_at=None, max_requests=30, stream=True, compact=True,
                  budget_path=None):
@@ -191,6 +217,8 @@ class ResponseGenerator:
         self.budget_path = budget_path
         self.budget_scope = hashlib.sha256(json.dumps([provider, sorted(self.test_chat_ids),
                                                       test_expires_at.isoformat() if test_expires_at else None]).encode()).hexdigest()
+        self._request_local = local()
+        self._lock = RLock()
         self.last_status = "not_called"
         self.last_clarification = ""
         self.last_metrics = {}
@@ -260,6 +288,10 @@ class ResponseGenerator:
         if not is_demo and chat_id is not None and (
                 chat_id not in self.test_chat_ids or self.test_expires_at is None):
             return None
+        if any(has_personal_disclosure(value) for value in
+               [question, obstacle, *(v for v in profile.values() if isinstance(v, str))]):
+            self.last_status = "privacy"
+            return None
         candidates = evidence[:3]
         context = {key: redact(profile[key][:100]) for key in ("stage", "sector", "goal")
                    if isinstance(profile.get(key), str)}
@@ -287,16 +319,17 @@ class ResponseGenerator:
         cache_key = hashlib.sha256(json.dumps([self.provider, self.model, prompt, inputs,
                                                chat_id, [(e.title, e.url) for e in candidates]],
                                               ensure_ascii=False, sort_keys=True).encode()).digest()
-        cached = self._cache.get(cache_key)
-        if cached and monotonic() - cached[0] < 300:
-            self.last_status = "answered"
-            self.last_metrics = {"cache_hit": True, "total_seconds": round(monotonic() - started, 3)}
-            self._cache.move_to_end(cache_key)
-            return cached[1]
-        self._cache.pop(cache_key, None)
-        if self.remaining_requests <= 0:
-            self.last_status = "budget"
-            return None
+        with self._lock:
+            cached = self._cache.get(cache_key)
+            if cached and monotonic() - cached[0] < 300:
+                self.last_status = "answered"
+                self.last_metrics = {"cache_hit": True, "total_seconds": round(monotonic() - started, 3)}
+                self._cache.move_to_end(cache_key)
+                return cached[1]
+            self._cache.pop(cache_key, None)
+            if self.remaining_requests <= 0:
+                self.last_status = "budget"
+                return None
         payload = {
             "model": self.model,
             "store": False,
@@ -317,10 +350,12 @@ class ResponseGenerator:
                                    "Content-Type": "application/json"})
         try:
             self.last_status = "unavailable"
-            if self.budget_path and not reserve_request(self.budget_path, self.budget_scope, self.max_requests):
-                self.last_status = "budget"
-                return None
-            self.remaining_requests -= 1
+            with self._lock:
+                if self.remaining_requests <= 0 or (self.budget_path and not reserve_request(
+                        self.budget_path, self.budget_scope, self.max_requests)):
+                    self.last_status = "budget"
+                    return None
+                self.remaining_requests -= 1
             with self.opener.open(request, timeout=self.timeout) as response:
                 envelope = self._read_response(response, candidates, started, on_preview)
             self.last_metrics["total_seconds"] = round(monotonic() - started, 3)
@@ -366,9 +401,10 @@ class ResponseGenerator:
                              sources=tuple((candidates[i].title, candidates[i].url) for i in indices))
             self.last_status = "answered"
             result_pair = (source, advice)
-            self._cache[cache_key] = (monotonic(), result_pair)
-            if len(self._cache) > 32:
-                self._cache.popitem(last=False)
+            with self._lock:
+                self._cache[cache_key] = (monotonic(), result_pair)
+                if len(self._cache) > 32:
+                    self._cache.popitem(last=False)
             return result_pair
         except HTTPError as error:
             # Never log request/response bodies, API keys, or exception URLs.

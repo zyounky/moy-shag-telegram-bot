@@ -3,12 +3,14 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
 import threading
 from pathlib import Path
-from time import sleep
+from time import monotonic
 
 from .bot import Assistant
+from .dispatch import ChatDispatcher, private_chat_id
 from .knowledge import Catalog
 from .llm import generator_from_env
 from .reminders import ReminderStore
@@ -43,6 +45,12 @@ def run(api, assistant):
     identity = api.call("getMe")
     LOG.info("Бот @%s готов", identity["username"])
     stop = threading.Event()
+    previous_signals = {}
+    if threading.current_thread() is threading.main_thread():
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous_signals[signum] = signal.signal(signum, lambda *_: stop.set())
+    dispatcher = ChatDispatcher(assistant.update)
+    busy_at = {}
 
     def worker():
         while not stop.is_set():
@@ -56,25 +64,41 @@ def run(api, assistant):
     reminders.start()
     offset = None
     try:
-        while True:
+        while not stop.is_set():
             try:
                 updates = api.poll(offset)
             except TelegramError as error:
                 if error.code in (401, 404, 409):
                     raise
                 LOG.warning("%s", error)
-                sleep(max(2, error.retry_after))
+                stop.wait(max(2, error.retry_after))
                 continue
+            if stop.is_set():
+                break
             for update in updates:
                 try:
-                    assistant.update(update)
+                    callback = update.get("callback_query")
+                    if callback:
+                        try:
+                            api.answer_callback(callback["id"])
+                            update = {**update, "_callback_acknowledged": True}
+                        except TelegramError:
+                            LOG.info("Подтверждение кнопки отложено")
+                    if not dispatcher.submit(update):
+                        chat = private_chat_id(update)
+                        if chat is not None and monotonic() - busy_at.get(chat, float("-inf")) >= 30:
+                            busy_at[chat] = monotonic()
+                            assistant.send(chat, "Сейчас много запросов. Дождитесь ответа на предыдущие сообщения и попробуйте ещё раз.")
                 except Exception as error:
                     LOG.error("Обновление %s: %s", update["update_id"], type(error).__name__)
                 finally:
                     offset = update["update_id"] + 1
     finally:
         stop.set()
+        dispatcher.close()
         reminders.join(timeout=12)
+        for signum, handler in previous_signals.items():
+            signal.signal(signum, handler)
 
 
 def main():

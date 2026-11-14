@@ -1,0 +1,54 @@
+services:
+  catalog:
+    build:
+      context: .
+      target: catalog
+    network_mode: none
+    environment:
+      DEMO_MODE: "${DEMO_MODE:-false}"
+      PYTHONUTF8: "1"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        if [ "$$DEMO_MODE" = "true" ] || [ "$$DEMO_MODE" = "1" ]; then
+          exit 0
+        fi
+        temporary=$$(mktemp /prepared/catalog.XXXXXX)
+        trap 'rm -f "$$temporary"' EXIT
+        if [ -s /input/catalog.jsonl ]; then
+          cp -- /input/catalog.jsonl "$$temporary"
+        elif [ -s /input/alfa_course_hackathon.backup ]; then
+          python3 scripts/catalog_build.py --backup /input/alfa_course_hackathon.backup --output "$$temporary"
+        else
+          echo "Put alfa_course_hackathon.backup or catalog.jsonl in ./data." >&2
+          exit 1
+        fi
+        chown 10001:10001 "$$temporary"
+        chmod 0400 "$$temporary"
+        mv -f -- "$$temporary" /prepared/catalog.jsonl
+    volumes:
+      - ./data:/input:ro
+      - catalog:/prepared
+
+  bot:
+    build:
+      context: .
+      target: bot
+    init: true
+    depends_on:
+      catalog:
+        condition: service_completed_successfully
+    environment:
+      BOT_TOKEN: "${BOT_TOKEN:-}"
+      CATALOG_PATH: "${CATALOG_PATH:-/app/catalog/catalog.jsonl}"
+      STATE_PATH: "${STATE_PATH:-/app/runtime/state.db}"
+      DEMO_MODE: "${DEMO_MODE:-false}"
+      OLLAMA_URL: "${OLLAMA_URL:-}"
+      OLLAMA_MODEL: "${OLLAMA_MODEL:-}"
+    volumes:
+      - catalog:/app/catalog:ro
+      - runtime:/app/runtime
+
+volumes:
+  catalog:
+  runtime:

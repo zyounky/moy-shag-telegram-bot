@@ -1,0 +1,10 @@
+# Only runtime source and dependency locks enter the build context.
+*
+!Dockerfile
+!requirements.txt
+!assistant_bot/
+!assistant_bot/**
+!scripts/
+!scripts/catalog_build.py
+**/__pycache__/
+**/*.py[cod]

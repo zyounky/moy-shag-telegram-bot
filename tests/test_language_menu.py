@@ -32,6 +32,15 @@ class Outbox:
 
 
 class LanguageMenuTest(unittest.TestCase):
+    def test_first_reminder_request_starts_reminder_setup_after_language_choice(self):
+        self.bot.update({
+            "message": {"chat": {"id": 1, "type": "private"}, "text": "Remind me to send the report"}
+        })
+        self.select("en")
+        self.assertEqual(self.conversations.get(1).pending["title"], "send the report")
+        self.assertIn("rem:type:business", self.outbox.buttons())
+        self.search.assert_not_called()
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

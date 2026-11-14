@@ -559,7 +559,7 @@ class Assistant:
                 state.pending.clear()
             self.conversations.save(chat, state)
             if question:
-                return self.answer(chat, state, question)
+                return self.message(chat, question)
             return self.show_home(chat, state)
         if data == "menu:home":
             return self.show_home(chat, state)

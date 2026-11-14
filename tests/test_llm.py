@@ -64,6 +64,17 @@ class GeneratorTests(unittest.TestCase):
         self.generator.opener.open.return_value = response_for(valid_result())
         self.assertIsNotNone(self.generate())
 
+    def test_english_advice_preserves_the_original_quote(self):
+        result = {**valid_result(), "answer": "Divide ad spend by the number of orders.",
+                  "action": "Divide ad spend by orders for the same period.",
+                  "completion": "Record the spend, orders, and cost per order."}
+        self.generator.opener.open.return_value = response_for(result)
+        _, advice = self.generate(is_demo=True, language="en")
+        prompt = json.loads(self.generator.opener.open.call_args.args[0].data)["input"][0]["content"]
+        self.assertIn("на английском", prompt)
+        self.assertEqual(advice.passage, QUOTE)
+        self.assertEqual(advice.action, result["action"])
+
     def test_obvious_contacts_and_keys_are_removed_before_request(self):
         self.generator.opener.open.return_value = response_for(valid_result())
         self.generator.generate("Моя почта person@example.org, телефон +7 (999) 123-45-67",

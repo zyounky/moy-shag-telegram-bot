@@ -13,6 +13,7 @@ class Conversation:
     action: dict = field(default_factory=dict)
     proposal: dict = field(default_factory=dict)
     topic: str = ""
+    language: str = ""
 
 
 class ConversationStore:

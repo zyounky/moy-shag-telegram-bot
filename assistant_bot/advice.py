@@ -117,6 +117,7 @@ class Advice:
     context: str
     regulated: bool
     completion: str = ""
+    answer: str = ""
 
 
 def compose_advice(query: str, evidence, profile: dict, obstacle: str = "") -> Advice:

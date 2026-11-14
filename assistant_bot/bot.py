@@ -51,12 +51,13 @@ def _demo_notice(catalog) -> str:
 
 
 class Assistant:
-    def __init__(self, api, catalog, conversations, reminders, chooser=None, now=None):
+    def __init__(self, api, catalog, conversations, reminders, chooser=None, now=None, generator=None):
         self.api = api
         self.catalog = catalog
         self.conversations = conversations
         self.reminders = reminders
         self.chooser = chooser
+        self.generator = generator
         self.now = now or (lambda: datetime.now(UTC))
 
     def send(self, chat: int, message: str, rows=None):
@@ -159,6 +160,11 @@ class Assistant:
         if self.chooser:
             evidence = self.chooser.choose(question, context, result.evidence)
         advice = compose_advice(question, evidence, state.profile, obstacle)
+        if self.generator:
+            generated = self.generator.generate(question, state.profile, result.evidence,
+                                                obstacle=obstacle, is_demo=self.catalog.is_demo)
+            if generated:
+                evidence, advice = generated
         action = self.conversations.new_action(advice.action, advice.passage, advice.url)
         action["source_title"] = advice.title
         action["subject"] = question
@@ -174,6 +180,8 @@ class Assistant:
             source += f" · {h(evidence.heading)}"
         if obstacle:
             sections.append(f"Уточнение к шагу: {h(obstacle[:130])}")
+        if advice.answer:
+            sections.append(f"<b>По вашей задаче</b>\n{h(advice.answer)}")
         sections += [f"<b>Что нашёл в «Альфа-Курсе»</b>\n<i>{source}</i>\n{h(advice.passage)}",
                      f"<b>Что сделать дальше</b>\n{h(advice.action)}"]
         if advice.completion:

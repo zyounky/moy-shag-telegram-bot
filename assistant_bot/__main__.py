@@ -9,6 +9,7 @@ from time import sleep
 
 from .bot import Assistant
 from .knowledge import Catalog
+from .llm import generator_from_env
 from .reminders import ReminderStore
 from .rerank import LocalReranker
 from .state import ConversationStore
@@ -32,8 +33,9 @@ class Console:
         print()
 
 
-def make_assistant(api, catalog, state_path, chooser=None):
-    return Assistant(api, catalog, ConversationStore(state_path), ReminderStore(state_path), chooser=chooser)
+def make_assistant(api, catalog, state_path, chooser=None, generator=None):
+    return Assistant(api, catalog, ConversationStore(state_path), ReminderStore(state_path),
+                     chooser=chooser, generator=generator)
 
 
 def run(api, assistant):
@@ -79,6 +81,7 @@ def main():
     parser.add_argument("--check", action="store_true", help="проверить загрузку каталога и SQLite")
     parser.add_argument("--demo", action="store_true", help="локальный диалог с учебными данными")
     parser.add_argument("--console", action="store_true", help="локальный диалог с указанным каталогом")
+    parser.add_argument("--llm-check", action="store_true", help="один реальный запрос LLM на учебных данных")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -89,14 +92,30 @@ def main():
     model_url = os.getenv("OLLAMA_URL", "").strip()
 
     try:
+        if args.llm_check:
+            generator = generator_from_env(os.environ)
+            if not generator:
+                raise ValueError("Для --llm-check задайте LLM_PROVIDER и ключ выбранного сервиса.")
+            demo = Catalog(DEMO_CATALOG)
+            question = "Как оценить эффективность рекламы кофейни?"
+            result = generator.generate(question, {}, demo.search(question).evidence, is_demo=True)
+            if not result:
+                LOG.error("Проверка LLM не пройдена. Проверьте ключ, доступ к модели, баланс и сеть.")
+                return 2
+            print(f"LLM готова: {generator.provider} / {generator.model}. Структура и цитата проверены.")
+            return 0
         catalog = Catalog(catalog_path)
         chooser = LocalReranker(model_url, os.getenv("OLLAMA_MODEL", "").strip()) if model_url else None
         if args.check:
             make_assistant(Console(), catalog, state_path)
             print(f"Каталог и SQLite готовы. Статьи: {catalog.article_count}, материалы: {catalog.material_count}.")
             return 0
+        generator = generator_from_env(os.environ)
+        if generator:
+            LOG.info("LLM: %s / %s; данные кейса: %s", generator.provider, generator.model,
+                     "разрешены настройкой" if generator.allow_case_data else "не отправляются")
         if args.demo or args.console:
-            assistant = make_assistant(Console(), catalog, state_path, chooser)
+            assistant = make_assistant(Console(), catalog, state_path, chooser, generator)
             assistant.message(1, "/start")
             for entry in sys.stdin:
                 text = entry.strip()
@@ -110,7 +129,7 @@ def main():
             LOG.error("Укажите токен Telegram в BOT_TOKEN. Для локального просмотра используйте --console.")
             return 2
         api = Telegram(token)
-        run(api, make_assistant(api, catalog, state_path, chooser))
+        run(api, make_assistant(api, catalog, state_path, chooser, generator))
     except (OSError, ValueError, TelegramError) as error:
         LOG.error("%s", error)
         return 2

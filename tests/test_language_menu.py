@@ -142,7 +142,7 @@ class LanguageMenuTest(unittest.TestCase):
         self.assertIn("What to do next", self.outbox.messages[-1][1])
         action = self.conversations.get(1).proposal["id"]
         self.bot.callback(1, f"action:take:{action}")
-        self.assertEqual(self.outbox.buttons()[f"action:remind:{action}"], "Remind me about this step")
+        self.assertEqual(self.outbox.buttons()[f"action:remind:{action}"], "Remind me")
         self.bot.callback(1, f"action:remind:{action}")
         self.bot.callback(1, "rem:in:1")
         self.assertEqual(self.outbox.buttons()["rem:freq:once"], "Once")

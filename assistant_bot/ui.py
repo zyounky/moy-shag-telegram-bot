@@ -2,23 +2,23 @@
 
 ENGLISH = {
     "Задать вопрос": "Ask a question",
-    "Мой шаг": "My next step",
+    "Моя задача": "My task",
     "Напоминания": "Reminders",
-    "Контекст бизнеса": "Business profile",
+    "Мой бизнес": "My business",
     "Помощь": "Help",
-    "Что умеет бот": "What I can do",
+    "Что я умею": "What I can do",
     "Язык": "Language",
-    "В меню": "Back to menu",
-    "Готовлюсь к запуску": "Preparing to launch",
+    "Назад в меню": "Back to menu",
+    "Планирую открыть": "Planning to open",
     "Уже работаю": "Already operating",
-    "Развиваю бизнес": "Growing my business",
+    "Расширяюсь": "Expanding",
     "Пропустить": "Skip",
-    "Сбросить профиль": "Reset profile",
-    "Заполните профиль или опишите ситуацию в следующем вопросе.": "Choose your business stage or describe your situation in your next question.",
-    "Укажите стадию бизнеса или уточните задачу сообщением.": "Choose your business stage or tell me more about your question.",
+    "Очистить профиль": "Clear business profile",
+    "Выберите этап бизнеса. Сферу можно указать в следующем вопросе.": "Choose your business stage. You can mention your industry in your next question.",
+    "Выберите этап бизнеса или расскажите подробнее.": "Choose your business stage or tell me more about your question.",
     "Какой результат нужен сейчас? Например, проверить спрос, привлечь клиентов или разобраться в учёте.": "What are you trying to achieve? For example, test demand, find customers, or sort out your bookkeeping.",
-    "Контекст обновлён. Напишите, с чем помочь.": "Profile updated. What can I help you with?",
-    "Контекст очищен.": "Business profile cleared.",
+    "Этап бизнеса сохранён. Напишите, с чем помочь.": "Business stage saved. What can I help you with?",
+    "Профиль бизнеса очищен.": "Business profile cleared.",
     "Пока пусто": "Nothing saved yet",
     "готовится к запуску": "preparing to launch",
     "уже работает": "already operating",
@@ -53,25 +53,25 @@ ENGLISH = {
     "Подходит к текущему этапу бизнеса.": "Matches your current business stage.",
     "Есть материал для вашей сферы.": "Relevant to your business sector.",
     "Подходит к теме запроса.": "Relevant to your question.",
-    "Взять шаг в работу": "Work on this step",
+    "Начать задачу": "Start task",
     "Задайте вопрос, чтобы выбрать первый шаг.": "Ask a question to find your first step.",
     "Предложен": "Suggested",
     "В работе": "In progress",
     "Выполнен": "Done",
     "Нужна помощь": "Needs attention",
     "Сделано": "Done",
-    "Есть препятствие": "I'm stuck",
-    "Напомнить об этом шаге": "Remind me about this step",
+    "Не получается": "I'm stuck",
+    "Напомнить": "Remind me",
     "У вас уже есть шаг в работе. Заменить его новым?": "You already have a step in progress. Replace it with this one?",
-    "Заменить шаг": "Replace step",
-    "Оставить текущий": "Keep current step",
+    "Заменить задачу": "Replace task",
+    "Оставить как есть": "Keep this task",
     "Это действие относится к предыдущему шагу.": "That button belongs to an earlier step.",
     "Шаг выполнен. Можно задать новый вопрос или открыть исходный материал.": "Step completed. Ask another question or open the source.",
     "Что помешало выполнить шаг? Напишите одним сообщением, и я попробую найти материал под это препятствие.": "What got in the way? Tell me in one message and I'll look for relevant material.",
     "Действие отменено.": "Canceled.",
     "О чём напомнить?": "What should I remind you about?",
-    "Обучение": "Learning",
-    "Бизнес-событие": "Business event",
+    "Учёба": "Learning",
+    "Работа": "Work",
     "Когда напомнить? Часовой пояс — <b>{zone}</b>. Введите дату и время, например <code>{example}</code>.": "When should I remind you? Your time zone is <b>{zone}</b>. Enter a date and time, for example <code>{example}</code>.",
     "Через минуту": "In one minute",
     "Завтра в 19:00": "Tomorrow at 19:00",
@@ -93,7 +93,9 @@ ENGLISH = {
     "Активных напоминаний нет.": "You have no active reminders.",
     "Добавить напоминание": "Add a reminder",
     "Мои напоминания": "My reminders",
-    "Изменить №{id}": "Edit #{id}",
+    "Напоминание №{id}": "Reminder #{id}",
+    "К напоминаниям": "View reminders",
+    "Повтор №{id}": "Repeat #{id}",
     "Отключить №{id}": "Turn off #{id}",
     "Эта настройка уже закрыта. Откройте /remind, чтобы создать напоминание.": "This setup is closed. Use /remind to create a reminder.",
     "Создание отменено.": "Reminder setup canceled.",
@@ -101,7 +103,7 @@ ENGLISH = {
     "Введите название. Например, «Отправить отчёт».": "Enter a title, for example “Send the report”.",
     "Выберите часовой пояс.": "Choose a time zone.",
     "Подтвердите напоминание": "Confirm reminder",
-    "Создать": "Create",
+    "Сохранить": "Save",
     "Это время уже прошло. Укажите новое.": "That time has passed. Choose a new time.",
     "Напоминание №{id} создано. Ближайшая отправка — {date}.": "Reminder #{id} created. Next reminder: {date}.",
     "Напоминание отключено.": "Reminder turned off.",
@@ -127,8 +129,8 @@ SCREENS = {
         "ask": "Напишите вопрос о бизнесе. Добавьте, что уже пробовали или какого результата хотите достичь.",
         "help": "<b>Помощь и команды</b>\n"
                 "/start или /menu — главное меню\n"
-                "/step — открыть мой шаг\n"
-                "/profile — контекст бизнеса\n"
+                "/step — открыть мою задачу\n"
+                "/profile — настройки моего бизнеса\n"
                 "/remind — создать напоминание\n"
                 "/reminders — открыть напоминания\n"
                 "/cancel — отменить текущий ввод\n"
@@ -149,8 +151,8 @@ SCREENS = {
         "ask": "Ask a business question. Mention what you've tried or what you want to achieve.",
         "help": "<b>Help and commands</b>\n"
                 "/start or /menu — main menu\n"
-                "/step — open your next step\n"
-                "/profile — business profile\n"
+                "/step — open your task\n"
+                "/profile — your business details\n"
                 "/remind — create a reminder\n"
                 "/reminders — view reminders\n"
                 "/cancel — cancel the current input\n"

@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import hashlib
+import sqlite3
 from copy import deepcopy
 from collections import OrderedDict
 from dataclasses import replace
@@ -13,6 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .advice import compose_advice
+from .budget import reserve_request
 
 
 LOG = logging.getLogger(__name__)
@@ -164,7 +166,8 @@ def answer_preview(text, candidates):
 
 class ResponseGenerator:
     def __init__(self, provider, api_key, model, *, timeout=30, allow_case_data=False,
-                 test_chat_ids=(), test_expires_at=None, max_requests=30, stream=True, compact=True):
+                 test_chat_ids=(), test_expires_at=None, max_requests=30, stream=True, compact=True,
+                 budget_path=None):
         if provider not in PROVIDERS:
             raise ValueError("LLM_PROVIDER: допустимы none, xai или openrouter.")
         if not api_key or not model:
@@ -184,6 +187,10 @@ class ResponseGenerator:
         self.test_chat_ids = frozenset(int(value) for value in test_chat_ids)
         self.test_expires_at = test_expires_at
         self.remaining_requests = max_requests
+        self.max_requests = max_requests
+        self.budget_path = budget_path
+        self.budget_scope = hashlib.sha256(json.dumps([provider, sorted(self.test_chat_ids),
+                                                      test_expires_at.isoformat() if test_expires_at else None]).encode()).hexdigest()
         self.last_status = "not_called"
         self.last_clarification = ""
         self.last_metrics = {}
@@ -306,6 +313,9 @@ class ResponseGenerator:
                                    "Content-Type": "application/json"})
         try:
             self.last_status = "unavailable"
+            if self.budget_path and not reserve_request(self.budget_path, self.budget_scope, self.max_requests):
+                self.last_status = "budget"
+                return None
             self.remaining_requests -= 1
             with self.opener.open(request, timeout=self.timeout) as response:
                 envelope = self._read_response(response, candidates, started, on_preview)
@@ -359,7 +369,7 @@ class ResponseGenerator:
         except HTTPError as error:
             # Never log request/response bodies, API keys, or exception URLs.
             LOG.warning("LLM %s: HTTP %s", self.provider, error.code)
-        except (URLError, OSError, ValueError, TypeError, KeyError, AttributeError):
+        except (URLError, OSError, ValueError, TypeError, KeyError, AttributeError, sqlite3.Error):
             LOG.warning("LLM %s: ответ недоступен или не прошёл проверку",
                         self.provider)
         self.last_metrics["total_seconds"] = round(monotonic() - started, 3)
@@ -382,4 +392,5 @@ def generator_from_env(env):
         test_expires_at=datetime.fromisoformat(expires) if expires else None,
         max_requests=int(env.get("LLM_MAX_REQUESTS", "30")),
         stream=env.get("LLM_STREAM", "true").strip().lower() in ("true", "1"),
+        budget_path=env.get("LLM_BUDGET_PATH", "").strip() or None,
     )

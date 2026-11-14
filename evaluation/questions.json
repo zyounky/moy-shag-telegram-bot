@@ -1,0 +1,498 @@
+[
+  {
+    "id": "plan",
+    "topic": "launch",
+    "question": "Как составить бизнес-план?",
+    "expected": "бизнес-план",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "plan_shop",
+    "topic": "launch",
+    "question": "Хочу открыть магазин одежды: с чего начать бизнес-план?",
+    "expected": "магазина одежды",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "competitors",
+    "topic": "marketing",
+    "question": "Как провести анализ конкурентов?",
+    "expected": "конкурент",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "competitor_table",
+    "topic": "documents",
+    "question": "Нужна таблица для анализа конкурентов",
+    "expected": "таблица для анализа конкурентов",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "marketing_plan",
+    "topic": "marketing",
+    "question": "Как составить маркетинговый план?",
+    "expected": "маркетинговый план",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "ad_effect",
+    "topic": "marketing",
+    "question": "Как отследить эффективность рекламы?",
+    "expected": "эффективность рекламы",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "negative_reviews",
+    "topic": "service",
+    "question": "Как работать с негативными отзывами?",
+    "expected": "отзыв",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "nps",
+    "topic": "glossary",
+    "question": "Что такое NPS?",
+    "expected": "^NPS$",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "conversion",
+    "topic": "glossary",
+    "question": "Что такое конверсия?",
+    "expected": "конверси",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "roi",
+    "topic": "glossary",
+    "question": "Что такое ROI?",
+    "expected": "ROI",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "cpa",
+    "topic": "glossary",
+    "question": "Что такое CPA?",
+    "expected": "CPA",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "ctr",
+    "topic": "glossary",
+    "question": "Объясни CTR простыми словами",
+    "expected": "CTR",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "ltv",
+    "topic": "glossary",
+    "question": "Что значит LTV?",
+    "expected": "LTV",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "swot",
+    "topic": "glossary",
+    "question": "Что такое SWOT-анализ?",
+    "expected": "SWOT",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "unit",
+    "topic": "glossary",
+    "question": "Что такое юнит-экономика?",
+    "expected": "юнит",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "cashflow",
+    "topic": "finance",
+    "question": "Как управлять денежным потоком?",
+    "expected": "cash flow|денежн",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "cashgap",
+    "topic": "finance",
+    "question": "Как не попасть в кассовый разрыв?",
+    "expected": "кассов|cash flow",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "breakeven",
+    "topic": "finance",
+    "question": "Как рассчитать точку безубыточности?",
+    "expected": "безубыточност|рентабельност|ресторан в цифрах",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "financial_analysis",
+    "topic": "finance",
+    "question": "Как провести финансовый анализ предприятия?",
+    "expected": "финансовый анализ",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "margin",
+    "topic": "glossary",
+    "question": "Что такое маржинальность?",
+    "expected": "маржин",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "profit",
+    "topic": "glossary",
+    "question": "Что такое чистая прибыль?",
+    "expected": "чистая прибыль",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "debtor",
+    "topic": "glossary",
+    "question": "Что такое дебиторская задолженность?",
+    "expected": "дебиторск",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "ebitda",
+    "topic": "glossary",
+    "question": "Объясни EBITDA",
+    "expected": "EBITDA",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "fixed_cost",
+    "topic": "glossary",
+    "question": "Что такое постоянные издержки?",
+    "expected": "постоянные издержки",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "variable_cost",
+    "topic": "glossary",
+    "question": "Что такое переменные затраты?",
+    "expected": "переменные затраты",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "retention",
+    "topic": "hr",
+    "question": "Как удержать сотрудников?",
+    "expected": "массово увольняются|удерж|мотивац",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "first_hire",
+    "topic": "hr",
+    "question": "Как нанять первого сотрудника?",
+    "expected": "первого сотрудника|привлечь сотрудников|найме сотрудника",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "hire_ip",
+    "topic": "hr",
+    "question": "Как ИП оформить сотрудника в штат?",
+    "expected": "ип оформить сотрудника",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "burnout",
+    "topic": "hr",
+    "question": "Что делать с выгоранием сотрудников?",
+    "expected": "выгоран|сотрудник",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "onboarding",
+    "topic": "glossary",
+    "question": "Что такое онбординг?",
+    "expected": "онбординг",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "kpi",
+    "topic": "glossary",
+    "question": "Что такое KPI?",
+    "expected": "KPI",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "nda",
+    "topic": "documents",
+    "question": "Нужен шаблон соглашения о неразглашении",
+    "expected": "соглашение о неразглашении",
+    "live": true,
+    "outcome": "evidence"
+  },
+  {
+    "id": "rental",
+    "topic": "documents",
+    "question": "Как оформить договор аренды помещения?",
+    "expected": "договор аренды нежилого",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "claim_wb",
+    "topic": "documents",
+    "question": "Нужна досудебная претензия Wildberries",
+    "expected": "досудебная претензия wildberries",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "salary_calc",
+    "topic": "calculator",
+    "question": "Где найти калькулятор зарплаты?",
+    "expected": "калькулятор зарплаты",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "percent_calc",
+    "topic": "calculator",
+    "question": "Нужен калькулятор процентов",
+    "expected": "калькулятор процентов",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "days_calc",
+    "topic": "calculator",
+    "question": "Где калькулятор календарных и рабочих дней?",
+    "expected": "календарных и рабочих дней",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "wb_registration",
+    "topic": "marketplace",
+    "question": "Как зарегистрироваться продавцом на Wildberries?",
+    "expected": "зарегистрироваться на wildberries",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "wb_marking",
+    "topic": "marketplace",
+    "question": "Как маркировать товары на Wildberries?",
+    "expected": "маркировать товары на wildberries",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "ozon",
+    "topic": "marketplace",
+    "question": "Как начать продавать на Ozon?",
+    "expected": "ozon",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "franchise",
+    "topic": "launch",
+    "question": "Как выбрать франшизу кофейни?",
+    "expected": "франшизу кофейни",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "franchise_def",
+    "topic": "glossary",
+    "question": "Что такое франшиза?",
+    "expected": "франшиз",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "mvp",
+    "topic": "glossary",
+    "question": "Что такое MVP?",
+    "expected": "MVP",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "custdev",
+    "topic": "glossary",
+    "question": "Что такое CustDev?",
+    "expected": "CustDev",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "crm",
+    "topic": "glossary",
+    "question": "Что такое CRM-система?",
+    "expected": "CRM",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "utm",
+    "topic": "glossary",
+    "question": "Что такое UTM?",
+    "expected": "UTM",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "rfm",
+    "topic": "glossary",
+    "question": "Что такое RFM-анализ?",
+    "expected": "RFM",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "cjm",
+    "topic": "glossary",
+    "question": "Объясни CJM",
+    "expected": "CJM",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "seo",
+    "topic": "glossary",
+    "question": "Что такое SEO?",
+    "expected": "SEO",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "b2b",
+    "topic": "glossary",
+    "question": "Что значит B2B?",
+    "expected": "B2B|бизнес для бизнеса",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "loyalty",
+    "topic": "glossary",
+    "question": "Что такое программа лояльности?",
+    "expected": "программа лояльности",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "supply",
+    "topic": "glossary",
+    "question": "Что такое логистика?",
+    "expected": "логистик",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "margin_paraphrase",
+    "topic": "glossary",
+    "question": "Объясни маржинальность простыми словами",
+    "expected": "маржин",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "nps_paraphrase",
+    "topic": "glossary",
+    "question": "Что значит индекс NPS?",
+    "expected": "NPS",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "retention_paraphrase",
+    "topic": "hr",
+    "question": "Сотрудники массово увольняются, что делать?",
+    "expected": "массово увольняются",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "plan_paraphrase",
+    "topic": "launch",
+    "question": "Какие разделы должны быть в бизнес-плане?",
+    "expected": "бизнес-план",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "negative_paraphrase",
+    "topic": "service",
+    "question": "Клиент оставил плохой отзыв: как ответить?",
+    "expected": "отзыв",
+    "live": false,
+    "outcome": "evidence"
+  },
+  {
+    "id": "no_moons",
+    "topic": "missing",
+    "question": "Сколько лун у Юпитера?",
+    "expected": "",
+    "live": false,
+    "outcome": "missing"
+  },
+  {
+    "id": "no_recipe",
+    "topic": "missing",
+    "question": "Напиши рецепт борща",
+    "expected": "",
+    "live": false,
+    "outcome": "missing"
+  },
+  {
+    "id": "no_poem",
+    "topic": "missing",
+    "question": "Сочини стихотворение про кота",
+    "expected": "",
+    "live": false,
+    "outcome": "missing"
+  },
+  {
+    "id": "vague_marketing",
+    "topic": "clarification",
+    "question": "Маркетинг",
+    "expected": "",
+    "live": false,
+    "outcome": "clarification"
+  },
+  {
+    "id": "vague_money",
+    "topic": "clarification",
+    "question": "Финансы",
+    "expected": "",
+    "live": false,
+    "outcome": "clarification"
+  }
+]

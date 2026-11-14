@@ -160,26 +160,64 @@ class Catalog:
         return sum(self._idf(t) * counts[t] * 2.2 / (counts[t] + norm)
                    for t in query if counts.get(t))
 
-    def _packet(self, doc, ranked_chunks, broad):
+    def _packet(self, doc, ranked_chunks, broad, query=(), budget=3600, procedure=False, define=False):
         best = ranked_chunks[0][1]
         ids = doc["chunks"]
         pos = ids.index(best)
-        selected = list(dict.fromkeys(([ids[0]] if broad else []) +
-                                     [best] + ids[max(0, pos - 1):pos + 3]))
-        parts = []
+        # Prefer other relevant sections over arbitrary neighbouring paragraphs.
+        # An adjacent block is still useful for definitions, conditions and lists.
+        steps = [i for i in ids if re.search(r"^шаг\s*\d|пошагов\w*\s+инструкц", self._chunks[i]["heading"], re.I)] if broad and procedure else []
+        formulae = [i for i in ids if re.search(r"формул|методик\w*\s+расч", self._chunks[i]["heading"], re.I)] if broad and define else []
+        formula_context = [j for i in formulae for j in ids[max(0, ids.index(i) - 1):ids.index(i) + 3]]
+        selected = list(dict.fromkeys(steps + ([ids[0]] + formulae + formula_context if formulae else []) + [best] +
+                                     ([ids[0]] if broad else []) +
+                                     [i for score, i in ranked_chunks[1:8]
+                                      if score >= ranked_chunks[0][0] * .55] +
+                                     ids[max(0, pos - 1):pos + 3]))
+        parts = {}
         size = 0
         for chunk_id in selected:
             text = self._chunks[chunk_id]["text"]
-            if text in parts or size + len(text) + 2 > 3600:
+            heading = self._chunks[chunk_id]["heading"].strip()
+            if chunk_id in steps and heading and not text.startswith(heading):
+                text = heading + "\n" + text
+            if text in parts.values():
                 continue
-            parts.append(text)
+            remaining = budget - size - (2 if parts else 0)
+            if len(text) > remaining:
+                # Never silently drop an oversized best chunk. Extract complete
+                # paragraphs/sentences in original order; no generated summary.
+                if chunk_id != best or remaining < 150:
+                    continue
+                text = self._excerpt(text, query, remaining)
+            if not text:
+                continue
+            parts[chunk_id] = text
             size += len(text) + 2
         row = doc["row"]
-        return Evidence(row["title"], row["url"], "\n\n".join(parts),
+        return Evidence(row["title"], row["url"], "\n\n".join(parts[i] for i in sorted(parts)),
                         self._chunks[best]["heading"], row["kind"],
                         row.get("content_scope", "public_text"), row.get("id", ""))
 
+    def _excerpt(self, text, query, budget):
+        units = [s.strip() for s in re.split(r"\n+|(?<=[.!?])\s+", text) if s.strip()]
+        # Keep the adjacent sentence too: it can contain a qualification, a
+        # formula or an example that has no overlapping query words.
+        ranked = sorted(range(len(units)),
+                        key=lambda i: (-self._score(query, Counter(_tokens(units[i]))), i))
+        selected = set()
+        size = 0
+        for anchor in ranked:
+            for i in (anchor, anchor + 1, anchor - 1):
+                if i < 0 or i >= len(units) or i in selected:
+                    continue
+                if size + len(units[i]) + 1 <= budget:
+                    selected.add(i)
+                    size += len(units[i]) + 1
+        return "\n".join(units[i] for i in sorted(selected))
+
     def search(self, query, context=None):
+        query = re.sub(r"простыми словами|простым языком|понятным языком", "", query, flags=re.I)
         original = set(_tokens(query))
         if "сотрудник" in original and "удержать" in original:
             original.remove("удержать")
@@ -194,6 +232,7 @@ class Catalog:
         context = context or {}
         specific = original & SPECIFIC
         define = bool(re.search(r"что такое|что значит|объясни|определение", query, re.I))
+        procedure = not define and bool(re.search(r"\bкак\b|с чего|порядок|инструкц|этап|раздел|что делать", query, re.I))
         candidates = set().union(*(self._postings.get(t, set()) for t in terms))
         chunk_scores = defaultdict(list)
         for chunk_id in candidates:
@@ -239,12 +278,22 @@ class Catalog:
         ranked.sort(key=lambda item: (-item[0], self._docs[item[1]]["row"]["title"]))
         evidence = []
         seen = set()
-        for _, doc_id, chunks, broad in ranked:
+        for score, doc_id, chunks, broad in ranked:
             doc = self._docs[doc_id]
+            if evidence and score < ranked[0][0] * .60:
+                continue
             key = doc["row"]["url"] or doc["row"]["title"]
             if key not in seen:
-                evidence.append(self._packet(doc, chunks, broad))
+                budget = 3600 if not evidence else 1600
+                packet = self._packet(doc, chunks, broad, terms, budget, procedure, define)
+                if not packet.passage:
+                    continue
+                evidence.append(packet)
                 seen.add(key)
+                # A direct glossary definition is sufficient on its own. Do not
+                # pull loosely related how-to articles into a simple definition.
+                if define and len(evidence) == 1 and broad and packet.kind == "glossary":
+                    break
             if len(evidence) == 3:
                 break
         cards.sort(reverse=True)

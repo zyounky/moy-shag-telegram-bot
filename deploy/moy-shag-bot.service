@@ -1,0 +1,40 @@
+[Unit]
+Description=Moy Shag Telegram assistant
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/moy-shag-bot/current
+ExecStart=/opt/moy-shag-bot/venv/bin/python -m assistant_bot
+EnvironmentFile=/etc/moy-shag-bot.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=CATALOG_PATH=/opt/moy-shag-bot/data/catalog.jsonl
+Environment=STATE_PATH=/var/lib/moy-shag-bot/state.db
+Environment=LLM_BUDGET_PATH=/var/lib/moy-shag-bot/llm-budget.db
+User=moy-shag-bot
+Group=moy-shag-bot
+StateDirectory=moy-shag-bot
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=40
+Nice=10
+MemoryMax=512M
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

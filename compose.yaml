@@ -55,6 +55,7 @@ services:
       LLM_TEST_EXPIRES_AT: "${LLM_TEST_EXPIRES_AT:-}"
       LLM_MAX_REQUESTS: "${LLM_MAX_REQUESTS:-30}"
       LLM_STREAM: "${LLM_STREAM:-true}"
+      LLM_BUDGET_PATH: "${LLM_BUDGET_PATH:-/app/runtime/llm-budget.db}"
     volumes:
       - catalog:/app/catalog:ro
       - runtime:/app/runtime

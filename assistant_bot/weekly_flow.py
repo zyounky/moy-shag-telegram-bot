@@ -156,6 +156,9 @@ class WeeklyFlow:
             title = self.step_text(step, "title", state.language)
             detail = (t("Примерно {minutes} мин.", minutes=step["minutes"]) if offered
                       else t(STEP_STATUS[step["status"]]))
+            if len(step.get("sessions", ())) > 1:
+                detail = (f"{len(step['sessions'])} " + ("sessions" if state.language == "en" else "подхода")
+                          + f", ~{step['total_minutes']} " + ("min total" if state.language == "en" else "мин. всего"))
             lines.append(f"{t('День {day}', day=step['day'])} · {h(title)} · {detail}")
         if notice:
             lines.append(t(notice))
@@ -197,6 +200,14 @@ class WeeklyFlow:
                   f"{t('Что сделать')}: {h(self.step_text(step, 'instruction', language))}",
                   f"{t('Как проверить результат')}: {h(self.step_text(step, 'completion', language))}",
                   t("Примерно {minutes} мин.", minutes=step["minutes"])]
+        if len(step.get("sessions", ())) > 1:
+            detail[-1] = (f"~{step['total_minutes']} " + ("min total, split across days:" if language == "en"
+                                                         else "мин. всего, по дням:"))
+            for session in step["sessions"]:
+                detail.append(f"{t('День {day}', day=session['day'])} · ~{session['minutes']} "
+                              + ("min" if language == "en" else "мин.") + f": {h(session['instruction'])}")
+            detail.append("Mark the action complete after all sessions and its result check."
+                          if language == "en" else "Отметьте действие выполненным после всех подходов и проверки результата.")
         if source := step.get("source"):
             title = source["title"]
             if source.get("heading"):

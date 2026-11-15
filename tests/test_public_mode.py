@@ -1,7 +1,9 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -298,3 +300,21 @@ class PublicModeTests(unittest.TestCase):
         self.assertIsNone(self.generate(public))
         self.assertEqual(public.last_status, "disabled")
         public.opener.open.assert_not_called()
+
+    def test_explicit_unlimited_quotas_preserve_accounting_rate_and_consent(self):
+        unlimited = self.generator(LLM_PUBLIC_GLOBAL_LIMIT="0", LLM_PUBLIC_USER_LIMIT="0")
+        self.allow(unlimited, 1)
+        for moment in (100, 131, 162, 193, 224, 255):
+            unlimited._cache.clear()
+            with patch("assistant_bot.budget.time", return_value=moment):
+                self.assertIsNotNone(self.generate(unlimited))
+        restarted = self.generator(LLM_PUBLIC_GLOBAL_LIMIT="0", LLM_PUBLIC_USER_LIMIT="0")
+        with patch("assistant_bot.budget.time", return_value=256):
+            self.assertIsNone(self.generate(restarted))
+            self.assertEqual(restarted.last_status, "public_rate")
+        access = restarted.public_access
+        self.assertTrue(access.choose(1, access.issue_notice(1), "declined"))
+        self.assertIsNone(self.generate(restarted))
+        self.assertEqual(restarted.last_status, "consent")
+        with closing(sqlite3.connect(self.budget)) as connection:
+            self.assertEqual(connection.execute("SELECT used FROM llm_public_global").fetchone()[0], 6)

@@ -11,6 +11,7 @@ from .knowledge import OFFICIAL_HOST, PREFIXES
 from .privacy import PrivacyRejected, _sanitize
 from .query_language import russian_search_query
 from .weekly_actions import ACTIONS, LOOKUPS, TOPICS, topic_for
+from .weekly_sessions import schedule, sessions_for
 
 
 _DEFINITION = re.compile(r"^(?:что такое|что значит|что означает|определение|расшифруй|what (?:is|are))\b", re.I)
@@ -228,6 +229,7 @@ def build_plan(catalog, question: str, profile: dict, *, advice=None, obstacle: 
     public_fragments = getattr(catalog, "public_fragments", None)
     no_past = profile.get("stage") == "launch" or bool(_NO_DATA.search(context))
     time_limited = False
+    session_count = 0
     for action in ACTIONS[topic]:
         signature = (action.kind, action.subject, action.artifact)
         if signature in signatures or action.artifact in artifacts:
@@ -252,16 +254,23 @@ def build_plan(catalog, question: str, profile: dict, *, advice=None, obstacle: 
                 break
         if not supporting:
             continue
-        if action.minutes > min(available, per_day):
+        sessions = sessions_for(action, per_day, future=no_past)
+        if not sessions or action.minutes > available or session_count + len(sessions) > 7:
             time_limited = True
             continue
         step = _make_step(action, *supporting, future=no_past or bool(_NO_TRACKING.search(context)), no_past=no_past,
                           ad_goal=_advertising_goal(f"{context} {profile.get('goal', '')}") if topic == "ad" else "")
+        # Single-session text can be adapted by _make_step (e.g. future data).
+        if len(sessions) == 1:
+            sessions[0].update(title=step["title"], instruction=step["instruction"])
+        step.update(sessions=sessions, total_minutes=action.minutes,
+                    minutes=max(session["minutes"] for session in sessions))
         steps.append(step)
         signatures.add(signature)
         if not action.draft_only:
             artifacts.add(action.artifact)
         available -= action.minutes
+        session_count += len(sessions)
         if len(steps) == 5:
             break
 
@@ -271,8 +280,7 @@ def build_plan(catalog, question: str, profile: dict, *, advice=None, obstacle: 
                     "clarification_en": "The sourced actions need more time. Which part of the task would you like to focus on?"}
         return {**result, "clarification": "В каталоге пока мало инструкций для плана. Что известно о вашей задаче сейчас?",
                 "clarification_en": "The catalog has too few instructions for a plan. What do you already know about your task?"}
-    for index, step in enumerate(steps):
-        step.update(id=str(index + 1), day=_DAYS[len(steps)][index])
+    schedule(steps)
     if time_limited or topic == "opening":
         result["limitation"] = ("Это черновик части бизнес-плана. Полный анализ рынка и финансовый прогноз потребуют отдельных проверок."
                                 if topic == "opening" else "Действия, которые требуют более длинной сессии, перенесены за пределы этого плана.")

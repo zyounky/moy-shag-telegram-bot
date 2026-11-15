@@ -652,9 +652,11 @@ class WeeklyPlanningContentTests(unittest.TestCase):
         short = build_plan(catalog, "Как рассчитать точку безубыточности за 20 минут в день?", {}, minutes=45)
         self.assertEqual([s["kind"] for s in full["steps"]], ["collect", "calculate", "calculate"])
         self.assertIn("0,4 для 40%", full["steps"][-1]["instruction"])
-        self.assertEqual(len(short["steps"]), 1)
-        self.assertTrue(short["steps"][0]["reduced"])
-        self.assertTrue(short["incomplete"])
+        self.assertEqual([s["kind"] for s in short["steps"]], ["collect", "calculate", "calculate"])
+        self.assertFalse(short["steps"][0]["reduced"])
+        self.assertEqual([s["minutes"] for s in short["steps"][0]["sessions"]], [20, 15])
+        self.assertEqual(short["steps"][0]["total_minutes"], 35)
+        self.assertFalse(short["incomplete"])
 
     def test_opening_plan_with_20_minutes_limits_scope(self):
         catalog = self.fixture(
@@ -666,6 +668,50 @@ class WeeklyPlanningContentTests(unittest.TestCase):
         self.assertTrue(all(s["minutes"] <= 20 for s in plan["steps"]))
         self.assertTrue(plan["incomplete"])
         self.assertIn("финансовый прогноз потребуют отдельных проверок", plan["limitation"])
+
+    def test_sessions_preserve_estimate_dependencies_and_one_session_per_day(self):
+        catalog = self.fixture("Маржинальность и точка безубыточности",
+            "Постоянные затраты не зависят от выручки. Маржа = выручка − переменные затраты. "
+            "Точка безубыточности = постоянные затраты / маржинальность.")
+        plan = build_plan(catalog, "Как рассчитать точку безубыточности?", {}, minutes=20)
+        self.assertEqual(len(plan["steps"]), 3)
+        days, artifacts = [], set()
+        for step in plan["steps"]:
+            self.assertTrue(set(step["requires"]) <= artifacts)
+            self.assertEqual(sum(s["minutes"] for s in step["sessions"]), step["total_minutes"])
+            self.assertTrue(all(0 < s["minutes"] <= 20 for s in step["sessions"]))
+            days.extend(s["day"] for s in step["sessions"])
+            artifacts.add(step["artifact"])
+        self.assertEqual(sum(s["total_minutes"] for s in plan["steps"]), 70)
+        self.assertEqual(days, sorted(set(days)))
+        self.assertTrue(all(1 <= day <= 7 for day in days))
+        self.assertNotEqual(plan["steps"][0]["sessions"][0]["instruction"],
+                            plan["steps"][0]["sessions"][1]["instruction"])
+        tiny = build_plan(catalog, "Как рассчитать точку безубыточности? Только 20 минут на неделю", {}, minutes=20)
+        self.assertLessEqual(sum(s["total_minutes"] for s in tiny["steps"]), 20)
+        self.assertFalse(any(s["kind"] == "calculate" for s in tiny["steps"]))
+
+    def test_retention_progresses_to_observation_in_short_daily_sessions(self):
+        catalog = self.fixture("Почему сотрудники увольняются",
+            "Узнайте причины их решения. Регулярный сбор обратной связи. Индивидуальные планы развития.")
+        plan = build_plan(catalog, "Как снизить текучесть сотрудников?", {}, minutes=20)
+        self.assertEqual([s["artifact"] for s in plan["steps"]],
+                         ["team_question_list", "team_feedback_note", "employee_development_draft"])
+        self.assertEqual(len(plan["steps"][1]["sessions"]), 2)
+        self.assertLess(plan["steps"][1]["day_end"], plan["steps"][2]["day"])
+
+    def test_multi_session_details_and_old_steps_remain_readable(self):
+        from assistant_bot.weekly_flow import WeeklyFlow
+        catalog = self.fixture("Маржинальность и точка безубыточности",
+            "Постоянные затраты не зависят от выручки. Маржа = выручка − переменные затраты. "
+            "Точка безубыточности = постоянные затраты / маржинальность.")
+        step = build_plan(catalog, "Как рассчитать точку безубыточности?", {}, minutes=20)["steps"][0]
+        flow = WeeklyFlow(Mock())
+        detail = flow.step_details(step, "ru")
+        self.assertIn("35 мин. всего", detail)
+        self.assertIn(step["sessions"][1]["instruction"], detail)
+        old = {k:v for k,v in step.items() if k not in {"sessions", "total_minutes", "day_end"}}
+        self.assertIn(old["completion"], flow.step_details(old, "ru"))
 
     def test_ambiguous_or_limited_demand_gets_only_sourced_work(self):
         plan = build_plan(self.demo, "Как проверить спрос до открытия кофейни?", {"stage": "launch"}, minutes=20)

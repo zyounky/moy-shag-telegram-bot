@@ -24,7 +24,10 @@ class PublicAccess:
     def __init__(self, path, provider, *, global_limit=30, user_limit=5, interval=30, concurrent=2):
         if not path or str(path) == ":memory:":
             raise ValueError("Публичный режим требует постоянный LLM_BUDGET_PATH.")
-        if not 1 <= user_limit <= global_limit or not 1 <= interval <= 86400 or not 1 <= concurrent <= 4:
+        # Zero disables only a quota, never consent, accounting or load limits.
+        if (global_limit < 0 or user_limit < 0
+                or (global_limit and user_limit > global_limit)
+                or not 1 <= interval <= 86400 or not 1 <= concurrent <= 4):
             raise ValueError("Проверьте публичные квоты, интервал LLM_PUBLIC_MIN_INTERVAL_SECONDS (1–86400) "
                              "и LLM_PUBLIC_MAX_CONCURRENT (1–4).")
         self.path = Path(path)
@@ -87,12 +90,12 @@ class PublicAccess:
             if self.decision(chat_id, db) != "granted":
                 return "consent"
             global_row = db.execute("SELECT used FROM llm_public_global WHERE id=1").fetchone()
-            if global_row and global_row[0] >= self.global_limit:
+            if self.global_limit and global_row and global_row[0] >= self.global_limit:
                 return "public_global"
             user_row = db.execute("SELECT used, last_attempt FROM llm_public_user WHERE chat_id=?",
                                   (chat_id,)).fetchone()
             now = time()
-            if user_row and user_row[0] >= self.user_limit:
+            if self.user_limit and user_row and user_row[0] >= self.user_limit:
                 return "public_user"
             if user_row and now < user_row[1] + self.interval:
                 return "public_rate"

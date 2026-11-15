@@ -74,6 +74,41 @@ CONCEPTS = tuple(frozenset(_stem(word) for word in group) for group in CONCEPT_W
 SPECIFIC_CONCEPTS = tuple(frozenset(_stem(word) for word in group) for group in SPECIFIC_CONCEPT_WORDS)
 MARKETPLACE_CONCEPT = SPECIFIC_CONCEPTS[-1]
 TAX_TERMS = _terms("налог налоги налоговый налогообложение")
+_AD_SUBJECT = r"(?:реклама|кампания|объявление|она|оно)"
+_AD_OUTCOME_QUESTION = re.compile(
+    rf"как (?:понять|узнать|проверить|оценить),?\s+(?:работает ли (?P<working>{_AD_SUBJECT})|"
+    rf"(?:приводит|привела|приносит|принесла|да[её]т) ли (?P<outcome>{_AD_SUBJECT}) "
+    r"(?:новых? )?(?:гостей|клиентов|покупателей|заказы|заявки|звонки|брони|визиты))", re.I
+)
+_AD_RESULT_QUESTION = re.compile(
+    r"как (?:измерить|оценить|проверить|посчитать) (?:е[её]|его) (?:результат|эффективность)", re.I
+)
+_AD_RUNNING = re.compile(
+    r"\b(?:реклама|кампания|объявление)\s+(?:уже\s+)?(?:ид[её]т|запущен[ао]?|работает)\b"
+    r"|\bзапустил[аи]?\s+(?:рекламу|кампанию|объявление)\b", re.I
+)
+_AD_CHANNEL = re.compile(
+    r"\b(?:реклам\w*|кампани\w*|объявлени\w*)\s+(?:на|в|через|для)\s+\w+", re.I
+)
+_AD_CONSTRAINT = re.compile(r"\bбез\s+(?:бюджет\w*|доступ\w*|статистик\w*|данных)\b", re.I)
+
+
+def _focus_ad_question(query: str) -> str:
+    """Resolve a generic measurement question without discarding named constraints."""
+    clauses = re.split(r"(?<=[.!?])\s+|\n+", query.strip())
+    question = clauses[-1].rstrip("?! .")
+    outcome = _AD_OUTCOME_QUESTION.fullmatch(question)
+    refers_to_ad = outcome and (outcome["working"] or outcome["outcome"]).casefold() not in ("она", "оно")
+    if not refers_to_ad:
+        if not (outcome or _AD_RESULT_QUESTION.fullmatch(question)):
+            return query
+        if len(clauses) < 2 or not _AD_RUNNING.search(clauses[-2]):
+            return query
+    if (any("?" in clause for clause in clauses[:-1]) or INITIALISM.search(query)
+            or _AD_CHANNEL.search(query) or _AD_CONSTRAINT.search(query)
+            or _terms(query) & (MARKETPLACE_CONCEPT | TAX_TERMS)):
+        return query
+    return "Как оценить эффективность рекламы?"
 
 
 @dataclass(frozen=True)
@@ -186,6 +221,20 @@ class Catalog:
         return weight + concepts * 0.7, len(exact) + concepts
 
     def search(self, query: str, context: dict[str, str] | None = None) -> SearchResult:
+        focused = _focus_ad_question(query)
+        if focused != query:
+            goal = (context or {}).get("goal", "")
+            if isinstance(goal, str) and goal.startswith("число "):
+                metric = goal.removeprefix("число ")
+                result = self._search(f"эффективность рекламы {metric}", context)
+                if result.evidence:
+                    return result
+            result = self._search(focused, context)
+            if result.evidence:
+                return result
+        return self._search(query, context)
+
+    def _search(self, query: str, context: dict[str, str] | None) -> SearchResult:
         query_terms = _terms(query)
         if not query_terms:
             return SearchResult(needs_clarification=True)

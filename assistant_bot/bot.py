@@ -240,6 +240,9 @@ class Assistant:
         rows = [[link("Открыть источник", advice.url)]] if advice.url else []
         rows.append([button("Начать задачу", f"action:take:{action['id']}")])
         self.add_recommendations(result, sections, rows, t, advice.url, advice.title)
+        hint = ("Откройте «Моя задача» → «Последний совет», чтобы вернуться к этому совету."
+                if state.action else "К этому совету можно вернуться через «Моя задача».")
+        sections.append(f"<i>{t(hint)}</i>")
         rows.extend(CONTROLS)
         self.send(chat, "\n\n".join(sections) + _demo_notice(self.catalog, t), rows)
 
@@ -267,14 +270,14 @@ class Assistant:
             if item.url:
                 rows.append([link("Подробнее о курсе" if item.kind == "course" else "Открыть материал", item.url)])
 
-    def show_action(self, chat, state):
-        action = state.action or state.proposal
+    def show_action(self, chat, state, *, show_proposal=False):
+        action = state.proposal if show_proposal else state.action or state.proposal
         if not action:
             return self.send(chat, "Задайте вопрос, чтобы выбрать первый шаг.",
                              [[button("Задать вопрос", "menu:ask")]] + CONTROLS)
         t = partial(ui_text, state.language)
         action_id = action["id"]
-        status = {"suggested": "Предложен", "active": "В работе", "done": "Выполнен",
+        status = {"suggested": "Совет", "active": "В работе", "done": "Выполнен",
                   "blocked": "Нужна помощь"}.get(action["status"], "")
         rows = [[link("Открыть источник", action["source"])]] if action["source"] else []
         if action["status"] == "suggested":
@@ -283,10 +286,16 @@ class Assistant:
             rows += [[button("Сделано", f"action:done:{action_id}"),
                       button("Не получается", f"action:blocked:{action_id}")],
                      [button("Напомнить", f"action:remind:{action_id}")]]
+        if not show_proposal and state.action and state.proposal:
+            rows.append([button("Последний совет", f"action:suggestion:{state.proposal['id']}")])
+        elif show_proposal and state.action:
+            rows.append([button("Моя задача", "action:show")])
         completion = action.get("completion")
         progress = f"\n\n<b>{t('Как проверить результат')}</b>\n{h(completion)}" if completion else ""
+        note = ("\n\n" + t("Нажмите «Начать задачу», чтобы поставить напоминание или отметить выполнение.")
+                if action["status"] == "suggested" else "")
         self.send(chat, f"<b>{t('Моя задача')} · {h(t(status))}</b>\n{h(action['title'])}{progress}\n\n"
-                        f"{t('Источник')}: {h(action['source_title'])}", rows + CONTROLS)
+                        f"{t('Источник')}: {h(action['source_title'])}{note}", rows + CONTROLS)
 
     def action_callback(self, chat, state, payload: str):
         if payload == "show":
@@ -294,6 +303,8 @@ class Assistant:
         intent, _, action_id = payload.partition(":")
         action = state.action
         proposal = state.proposal
+        if intent == "suggestion" and proposal.get("id") == action_id:
+            return self.show_action(chat, state, show_proposal=True)
         if intent in ("take", "replace") and proposal.get("id") == action_id:
             if intent == "take" and action.get("status") in ("active", "blocked"):
                 return self.send(chat, "У вас уже есть шаг в работе. Заменить его новым?",
@@ -399,7 +410,7 @@ class Assistant:
             lines.append(f"{t('Напоминание №{id}', id=item.id)} · {h(item.title)}\n"
                          f"{h(_format_local(item.next_run, item.timezone, language))} · "
                          f"{t(FREQUENCIES[item.frequency])}")
-            rows.append([button(t("Повтор №{id}", id=item.id), f"manage:edit:{item.id}"),
+            rows.append([button(t("Изменить частоту №{id}", id=item.id), f"manage:edit:{item.id}"),
                          button(t("Отключить №{id}", id=item.id), f"manage:off:{item.id}")])
         self.send(chat, "\n\n".join(lines), rows + add)
 
@@ -482,7 +493,7 @@ class Assistant:
             item = self.reminders.get(chat, reminder_id)
             if not item or not item.active:
                 return self.send(chat, "Напоминание уже завершено или отключено.")
-            return self.send(chat, t("Новая частота для «{title}»?", title=h(item.title)),
+            return self.send(chat, t("Как часто напоминать?\n«{title}»", title=h(item.title)),
                              self.frequency_buttons(language, f"manage:set:{reminder_id}") + CONTROLS)
         if intent == "set" and frequency in FREQUENCIES:
             item = self.reminders.set_frequency(chat, reminder_id, frequency, now=self.now())

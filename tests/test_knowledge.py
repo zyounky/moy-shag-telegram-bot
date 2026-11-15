@@ -33,6 +33,18 @@ class CatalogSearchTests(unittest.TestCase):
         self.assertEqual(missing.evidence, ())
         self.assertEqual(missing.recommendations, ())
 
+    def test_ad_measurement_restates_only_a_generic_question(self):
+        relevant = self.catalog.search("Мы запустили рекламу. Как понять, работает ли она?")
+        self.assertIn("результат рекламы", relevant.evidence[0].title)
+        for question in (
+            "Реклама на Ozon уже идёт. Как понять, работает ли она?",
+            "Реклама уже идёт. Как измерить её результат в ZZX?",
+            "Реклама идёт. Доставка задерживается. Как понять, работает ли она?",
+            "Реклама идёт. Как измерить температуру духовки?",
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(self.catalog.search(question).evidence, ())
+
     def test_paid_card_exposes_only_metadata(self):
         result = self.catalog.search("Как вести налоговый учёт на УСН при продажах на маркетплейсе?")
         self.assertEqual(result.evidence, ())

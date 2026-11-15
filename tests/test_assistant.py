@@ -58,8 +58,15 @@ class AssistantTest(unittest.TestCase):
         self.click("Сохранить")
         self.bot.message(1, question)
         self.assertEqual(self.conversations.get(1).action["id"], first)
+        self.assertIn("Последний совет", self.emitted.messages[-1][1])
+        self.bot.message(1, "/step")
+        self.click("Последний совет")
+        self.assertIn("Моя задача · Совет", self.emitted.messages[-1][1])
         self.click("Начать задачу")
         self.assertIn("Заменить его новым", self.emitted.messages[-1][1])
+        self.click("Оставить как есть")
+        self.assertEqual(self.conversations.get(1).action["id"], first)
+        self.assertEqual(len(self.reminders.list_active(1)), 1)
         self.start()
         self.time += timedelta(minutes=1)
         self.bot.deliver_reminders()
@@ -82,6 +89,22 @@ class AssistantTest(unittest.TestCase):
         self.assertIn("не нашёл подтверждённого ответа", self.emitted.messages[-1][1])
         self.assertFalse(self.conversations.get(1).pending)
 
+    def test_natural_ad_question_prioritizes_visits_and_can_be_reopened(self):
+        self.bot.message(1, "У меня работающая кофейня. Реклама уже идёт, но я не понимаю, "
+                             "приводит ли она новых гостей. Как измерить её результат?")
+        answer = self.emitted.messages[-1][1]
+        self.assertIn("Как измерить результат рекламы небольшой кофейни", answer)
+        self.assertIn("Подготовьте небольшой тест", answer)
+        self.assertIn("Кофейня · уже работает", answer)
+        self.assertIn("посчитайте визиты", answer)
+        self.assertIn("Записано число визитов", answer)
+        self.assertIn("вернуться через «Моя задача»", answer)
+        self.start()
+        self.bot.message(1, "/step")
+        self.assertIn("Моя задача · Совет", self.emitted.messages[-1][1])
+        self.click("Начать задачу")
+        self.assertIn("Моя задача · В работе", self.emitted.messages[-1][1])
+
     def test_business_reminder_can_be_edited_delivered_and_disabled(self):
         self.bot.message(1, "/remind")
         self.click("Работа")
@@ -91,7 +114,8 @@ class AssistantTest(unittest.TestCase):
         self.click("Сохранить")
         reminder, = self.reminders.list_active(1)
         self.bot.message(1, "/reminders")
-        self.click(f"Повтор №{reminder.id}")
+        self.click(f"Изменить частоту №{reminder.id}")
+        self.assertIn("Как часто напоминать?", self.emitted.messages[-1][1])
         self.click("Еженедельно")
         self.time += timedelta(minutes=1)
         self.bot.deliver_reminders()

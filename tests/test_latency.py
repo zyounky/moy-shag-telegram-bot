@@ -72,7 +72,7 @@ class LatencyTests(unittest.TestCase):
         value = {**result(), "answer": "Первое предложение.\nВторое содержит «пример» и кавычки: \"да\"."}
         text = json.dumps(value, ensure_ascii=True)
         for cut in range(len(text)):
-            preview = answer_preview(text[:cut], (SOURCE,))
+            preview = answer_preview(text[:cut], (SOURCE.passage,))
             if preview:
                 self.assertTrue(value["answer"].startswith(preview))
 

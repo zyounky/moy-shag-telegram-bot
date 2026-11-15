@@ -16,7 +16,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .advice import compose_advice
 from .budget import reserve_request
-from .privacy import has_personal_disclosure
+from .privacy import prepare_outbound, validate_outbound
 
 
 LOG = logging.getLogger(__name__)
@@ -78,14 +78,6 @@ SCHEMA = {
     "additionalProperties": False,
 }
 _LINK = re.compile(r"https?://|www\.|tg://|t\.me/", re.I)
-_EMAIL = re.compile(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}")
-_PHONE = re.compile(r"(?<!\w)\+?\d[\d ()-]{8,}\d(?!\w)")
-_SECRET = re.compile(r"\b(?:xai-|sk-)[A-Za-z0-9_-]{8,}\b|\b\d{6,}:[A-Za-z0-9_-]{20,}\b")
-
-
-def redact(text):
-    """Remove obvious contacts/keys, not a guarantee of anonymization."""
-    return _SECRET.sub("[ключ скрыт]", _PHONE.sub("[номер скрыт]", _EMAIL.sub("[email скрыт]", text)))
 
 
 def quote_options(question, passage):
@@ -109,7 +101,11 @@ class NoRedirects(HTTPRedirectHandler):
         return None
 
 
-def answer_preview(text, candidates):
+def _quote_is_supported(quote, passage):
+    return " ".join(quote.split()) in " ".join(passage.split())
+
+
+def answer_preview(text, sent_passages):
     """Read partial JSON text, only after the source anchor has been validated."""
     decoder = json.JSONDecoder()
     fields = {}
@@ -153,12 +149,12 @@ def answer_preview(text, candidates):
     quote = fields.get("quote")
     answer = fields.get("answer", partial)
     if (fields.get("status") != "answered" or type(index) is not int
-            or not 0 <= index < len(candidates) or not isinstance(indices, list)
+            or not 0 <= index < len(sent_passages) or not isinstance(indices, list)
             or not 1 <= len(indices) <= 3 or index not in indices
-            or any(type(i) is not int or not 0 <= i < len(candidates) for i in indices)
+            or any(type(i) is not int or not 0 <= i < len(sent_passages) for i in indices)
             or len(set(indices)) != len(indices) or not isinstance(quote, str)
             or not 35 <= len(quote) <= 350
-            or " ".join(quote.split()) not in " ".join(redact(candidates[index].passage[:3600]).split())
+            or not _quote_is_supported(quote, sent_passages[index])
             or not isinstance(answer, str) or not 30 <= len(answer) <= 1600
             or _LINK.search(answer) or "<" in answer or ">" in answer
             or any(0xD800 <= ord(c) <= 0xDFFF for c in answer)):
@@ -227,7 +223,7 @@ class ResponseGenerator:
         self._cache = OrderedDict()
         self.opener = build_opener(NoRedirects())
 
-    def _read_response(self, response, candidates, started, on_preview):
+    def _read_response(self, response, sent_passages, started, on_preview):
         headers = getattr(response, "headers", {})
         if "text/event-stream" not in headers.get("Content-Type", ""):
             raw = response.read(262145)
@@ -253,7 +249,7 @@ class ResponseGenerator:
                 if "first_token_seconds" not in self.last_metrics:
                     self.last_metrics["first_token_seconds"] = round(monotonic() - started, 3)
                 output += event.get("delta", "")
-                preview = answer_preview(output, candidates)
+                preview = answer_preview(output, sent_passages)
                 if preview:
                     if "first_answer_seconds" not in self.last_metrics:
                         self.last_metrics["first_answer_seconds"] = round(monotonic() - started, 3)
@@ -288,22 +284,13 @@ class ResponseGenerator:
         if not is_demo and chat_id is not None and (
                 chat_id not in self.test_chat_ids or self.test_expires_at is None):
             return None
-        if any(has_personal_disclosure(value) for value in
-               [question, obstacle, *(v for v in profile.values() if isinstance(v, str))]):
+        candidates = evidence[:3]
+        try:
+            inputs = prepare_outbound(question, profile, obstacle, candidates)
+        except Exception:
+            # Fail closed even if an input sanitizer or local check fails unexpectedly.
             self.last_status = "privacy"
             return None
-        candidates = evidence[:3]
-        context = {key: redact(profile[key][:100]) for key in ("stage", "sector", "goal")
-                   if isinstance(profile.get(key), str)}
-        inputs = {
-            "question": redact(question[:750]),
-            "context": context,
-            "obstacle": redact(obstacle[:400]),
-            "passages": [{"source_index": i, "title": redact(item.title[:180]),
-                          "kind": item.kind, "content_scope": item.content_scope,
-                          "text": redact(item.passage[:3600])}
-                         for i, item in enumerate(candidates)],
-        }
         prompt = COMPACT_PROMPT if self.compact else SYSTEM_PROMPT
         if language == "en":
             prompt += ("\nДля этого диалога пиши поля answer, action и completion на английском. "
@@ -311,25 +298,11 @@ class ResponseGenerator:
         schema = deepcopy(SCHEMA)
         if self.compact:
             for passage in inputs["passages"]:
-                passage["quote_options"] = quote_options(question, passage["text"])
+                passage["quote_options"] = quote_options(inputs["question"], passage["text"])
             quotes = list(dict.fromkeys(q for p in inputs["passages"] for q in p["quote_options"]))
             schema["properties"]["quote"] = {"type": "string", "enum": ["", *quotes]}
             for key, maximum in (("answer", 1600), ("action", 180), ("completion", 180)):
                 schema["properties"][key]["maxLength"] = maximum
-        cache_key = hashlib.sha256(json.dumps([self.provider, self.model, prompt, inputs,
-                                               chat_id, [(e.title, e.url) for e in candidates]],
-                                              ensure_ascii=False, sort_keys=True).encode()).digest()
-        with self._lock:
-            cached = self._cache.get(cache_key)
-            if cached and monotonic() - cached[0] < 300:
-                self.last_status = "answered"
-                self.last_metrics = {"cache_hit": True, "total_seconds": round(monotonic() - started, 3)}
-                self._cache.move_to_end(cache_key)
-                return cached[1]
-            self._cache.pop(cache_key, None)
-            if self.remaining_requests <= 0:
-                self.last_status = "budget"
-                return None
         payload = {
             "model": self.model,
             "store": False,
@@ -345,7 +318,28 @@ class ResponseGenerator:
             # No automatic provider fallback or data-collection-enabled route.
             payload["provider"] = {"data_collection": "deny", "allow_fallbacks": False,
                                    "require_parameters": True}
-        request = Request(self.endpoint, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        try:
+            validate_outbound(payload)
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            cache_key = hashlib.sha256(json.dumps([self.provider, self.model, prompt, inputs, chat_id,
+                                                   [(e.title, e.url, e.material_id) for e in candidates]],
+                                                  ensure_ascii=False, sort_keys=True).encode()).digest()
+        except Exception:
+            self.last_status = "privacy"
+            return None
+        sent_passages = tuple(passage["text"] for passage in inputs["passages"])
+        with self._lock:
+            cached = self._cache.get(cache_key)
+            if cached and monotonic() - cached[0] < 300:
+                self.last_status = "answered"
+                self.last_metrics = {"cache_hit": True, "total_seconds": round(monotonic() - started, 3)}
+                self._cache.move_to_end(cache_key)
+                return cached[1]
+            self._cache.pop(cache_key, None)
+            if self.remaining_requests <= 0:
+                self.last_status = "budget"
+                return None
+        request = Request(self.endpoint, data=body,
                           headers={"Authorization": f"Bearer {self._api_key}",
                                    "Content-Type": "application/json"})
         try:
@@ -357,7 +351,7 @@ class ResponseGenerator:
                     return None
                 self.remaining_requests -= 1
             with self.opener.open(request, timeout=self.timeout) as response:
-                envelope = self._read_response(response, candidates, started, on_preview)
+                envelope = self._read_response(response, sent_passages, started, on_preview)
             self.last_metrics["total_seconds"] = round(monotonic() - started, 3)
             usage = envelope.get("usage") or {}
             self.last_metrics["input_tokens"] = usage.get("input_tokens")
@@ -393,7 +387,7 @@ class ResponseGenerator:
                         or _LINK.search(value) or "<" in value or ">" in value):
                     raise ValueError("Invalid advice text")
             source = candidates[index]
-            if " ".join(result["quote"].split()) not in " ".join(redact(source.passage[:3600]).split()):
+            if not _quote_is_supported(result["quote"], sent_passages[index]):
                 raise ValueError("Unsupported quote")
             base = compose_advice(question, source, profile, obstacle)
             advice = replace(base, passage=result["quote"], answer=result["answer"],

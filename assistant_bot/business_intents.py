@@ -20,6 +20,9 @@ SEARCHES = {
 
 def business_topic(text):
     text = re.sub(r"\s+", " ", text.casefold().replace("ё", "е"))
+    if (re.match(r"^(?:что такое|что значит|что означает|определение|расшифруй|what is)\b", text)
+            and not re.search(r"(?:[.!?]\s*|\bи\s+)как\b|\band how\b", text)):
+        return ""
     if staff_retention_intent(text):
         return "retention"
     if re.search(r"бизнес[ -]?план", text):

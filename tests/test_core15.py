@@ -9,15 +9,18 @@ from assistant_bot.business_intents import business_topic
 from assistant_bot.knowledge import Catalog
 from assistant_bot.weekly_actions import topic_for
 from assistant_bot.weekly_plan import build_plan
+from assistant_bot.weekly_plan import adjustment_for
 
 
 class CoreScenarioTests(unittest.TestCase):
     def catalog(self, rows):
         temporary = TemporaryDirectory(); self.addCleanup(temporary.cleanup)
         path = Path(temporary.name) / 'catalog.jsonl'
-        data = [{'format':1,'mode':'demo'}]
-        data.extend({'title':title,'url':'','kind':kind,'price':0,'content_scope':scope,
-                     'passages':[{'text':text}]} for title,text,kind,scope in rows)
+        data = [{'format':1,'mode':'case'}]
+        prefixes={'article':'articles','document':'documents','glossary':'glossary','podcast':'podcasts'}
+        data.extend({'title':title,'url':f'https://kurs.alfabank.ru/{prefixes[kind]}/core-test-{index}/',
+                     'kind':kind,'price':0,'content_scope':scope,
+                     'passages':[{'text':text}]} for index,(title,text,kind,scope) in enumerate(rows))
         path.write_text('\n'.join(json.dumps(x,ensure_ascii=False) for x in data),encoding='utf-8')
         return Catalog(path)
 
@@ -30,10 +33,15 @@ class CoreScenarioTests(unittest.TestCase):
         for q in ('Как сравнить два рекламных объявления по стоимости заявки?',
                   'У двух объявлений разные затраты и число обращений. Как выбрать более выгодное?'):
             self.assertEqual(catalog.search(q).evidence[0].title,'Как отследить эффективность рекламы')
+            local=compose_advice(q,catalog.search(q).evidence[0],{})
+            self.assertTrue(local.local_complete)
+            self.assertIn('не делите на ноль',local.answer)
         for q in ('Как найти первого сотрудника и выбрать канал поиска?', 'Нужно нанять человека. Как начать подбор?'):
             self.assertEqual(catalog.search(q).evidence[0].title,'Как привлечь сотрудников')
             self.assertEqual(topic_for(q),'hiring')
         self.assertNotEqual(business_topic('Как оформить трудовой договор с сотрудником при найме?'),'hiring')
+        with_numbers='Как сравнить два рекламных объявления по стоимости заявки? Есть 6000 рублей и 20 заявок.'
+        self.assertFalse(compose_advice(with_numbers,catalog.search(with_numbers).evidence[0],{}).local_complete)
 
     def test_cashflow_uses_readable_instructions_instead_of_podcast_description(self):
         catalog = self.catalog([
@@ -108,3 +116,18 @@ class CoreScenarioTests(unittest.TestCase):
         self.assertIn('250 000',answer.answer)
         self.assertEqual(topic_for('Затраты на рекламу и продажи есть. Как проверить возврат вложений?'),'romi')
         self.assertEqual(topic_for('Как проверить интерес к услуге до запуска?'),'demand')
+
+    def test_kpi_plan_uses_general_role_instructions_not_the_sales_example(self):
+        catalog=self.catalog([
+            ('Показатели эффективности менеджеров по продажам','Для менеджеров в примере порог премии 80–85%.','article','public_text'),
+            ('KPI','KPI помогают оценить, как сотрудники достигают бизнес-целей. Для каждой задачи выберите 1–2 измеримых ключевых показателя. Убедитесь, что цели понятны и сотрудники считают их достижимыми.','glossary','public_text')])
+        q='В статье о продавцах порог премии 80–85%. Можно ли назначить его всем ролям?'
+        plan=build_plan(catalog,q,{},minutes=20)
+        self.assertEqual(len(plan['steps']),3)
+        self.assertEqual({s['source']['title'] for s in plan['steps']},{'KPI'})
+
+    def test_partial_lead_cost_result_requires_the_missing_spend_not_zero(self):
+        answer=adjustment_for({'subject':'cost_per_lead','completion':'Есть расходы и заявки.'},
+                              'Получилось частично: заявки есть, но не найдены расходы.')
+        self.assertIn('той же кампании',answer)
+        self.assertIn('нулём',answer)

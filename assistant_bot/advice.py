@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from .answer_policy import (ad_finance_intent, break_even_advice, general_staff_kpi,
                             missing_leads, sales_staff_title, shop_example_mismatch, unsupported_claim)
+from .business_intents import business_topic
 
 
 STAGES = {
@@ -158,6 +159,19 @@ def compose_advice(query: str, evidence, profile: dict, obstacle: str = "") -> A
         return Advice(passage, evidence.title, evidence.url, action, context, regulated,
                       completion, answer, sourced,
                       local_complete=bool(re.search(r"пункт|заполн|полный текст|содержим|услови", query, re.I)))
+    if (business_topic(query) == "ad_compare" and not re.search(r"\d", query)
+            and evidence.content_scope in {"public_text", "free_lesson"}
+            and re.search(r"\bCPL\b.{0,80}(?:цен\w* за лид|стоимост\w* (?:заявк|получения контакта))", evidence.passage, re.I)):
+        answer = ("Сравните CPL — стоимость одной заявки — по каждому объявлению отдельно. "
+                  "Из определения цены за лид следует расчёт: расходы на объявление ÷ число заявок. "
+                  "Используйте один период и одинаковое определение заявки. Если заявок ноль, не делите на ноль; "
+                  "отметьте, что цена заявки не определена. По общим суммам двух объявлений победителя не выбрать. "
+                  "Меньший CPL означает более дешёвую заявку, но сам по себе не доказывает прибыль или окупаемость.")
+        return Advice(passage, evidence.title, evidence.url,
+                      "Сведите расходы и число заявок по каждому объявлению за один период; отметьте пропуски.",
+                      context, regulated,
+                      "Есть отдельные расходы и заявки для обоих объявлений либо указаны конкретные пропуски.",
+                      answer, sourced, local_complete=True)
     if not regulated and ad_finance_intent(query) and missing_leads(f"{query}\n{obstacle}"):
         answer = ("Без числа заявок нельзя проверить стоимость заявки. Для оценки окупаемости "
                   "проверьте отдельно, сохранились ли расходы на рекламу и данные о продажах, "

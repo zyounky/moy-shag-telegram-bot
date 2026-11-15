@@ -316,7 +316,9 @@ class Catalog:
                 return replace(example, evidence=scoped, needs_clarification=False)
         if tax_regime_needed(query):
             return SearchResult(needs_clarification=True)
-        if re.search(r"\b(?:шаблон|образец|бланк)\w*", query, re.I) and re.search(r"\bnda\b|неразглашени", query, re.I):
+        if (re.search(r"\b(?:шаблон|образец|бланк)\w*", query, re.I)
+                and re.search(r"\bnda\b|неразглашени", query, re.I)
+                and not re.search(r"персональн|работник", query, re.I)):
             template = self._search("нужен шаблон соглашения о неразглашении", context)
             if any(card.kind == "document" for card in template.recommendations):
                 return template
@@ -337,14 +339,28 @@ class Catalog:
         if staff_retention_intent(query):
             result = self._search("Почему сотрудники увольняются?", context)
             if result.evidence:
-                return result
+                focused = []
+                for e in result.evidence:
+                    fragments = self.public_fragments(e, re.compile(r"узнайте причины их решения|анонимно собрать вопросы", re.I))
+                    fragments += self.public_fragments(e, re.compile(r"не прислушивается к обратной связи|перегруз|зарплат", re.I))
+                    focused.append(replace(e, passage="\n\n".join(dict.fromkeys(x.passage for x in fragments))[:3600], heading="")
+                                   if fragments else e)
+                return replace(result, evidence=tuple(focused))
         topic = business_topic(query)
         if topic:
-            focused_result = self._search(SEARCHES[topic], context)
+            focus_query = ("Бизнес-план магазина одежды" if topic == "opening" and re.search(r"одежд", query, re.I)
+                           else SEARCHES[topic])
+            focused_result = self._search(focus_query, context)
             public = tuple(e for e in focused_result.evidence
                            if e.content_scope in {"public_text", "free_lesson"}
                            and applicable_business_source(topic, e.title, query))
             if public:
+                if topic == "cashflow":
+                    flow = self._search("Cash Flow", context)
+                    supplement = tuple(replace(e, passage=e.passage[:1600]) for e in flow.evidence
+                                       if e.content_scope == "public_text" and e.url not in {p.url for p in public})
+                    specific = re.search(r"прибыл|поставщик|плат[её]ж|остаток|платить", query, re.I)
+                    public = (public + supplement if specific else supplement + public)[:3]
                 return replace(focused_result, evidence=public, needs_clarification=False)
         focused = _focus_ad_question(query)
         if focused != query:

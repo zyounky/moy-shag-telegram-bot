@@ -7,6 +7,7 @@ import re
 from urllib.parse import urlsplit
 
 from .advice import catalog_context
+from .answer_policy import general_staff_kpi
 from .knowledge import OFFICIAL_HOST, PREFIXES
 from .privacy import PrivacyRejected, _sanitize
 from .query_language import russian_search_query
@@ -46,7 +47,7 @@ _LEARN = re.compile(r"(?:хочу|нужен|подбери|найди|посо�
                     r"[^.!?]{0,65}\b(?:курс|обучени|course|training)\w*|системн\w+ обучени", re.I)
 _FREE_ONLY = re.compile(r"бесплатн|без покупк|не (?:нужен|хочу) платн|free only|no paid", re.I)
 _TEMPLATE = re.compile(r"\b(?:шаблон|бланк|образец|template)\w*", re.I)
-_BLOCKED = re.compile(r"нет (?:доступ|данн|статистик)|не наш[её]л|не хватает|пробел|no (?:data|access)", re.I)
+_BLOCKED = re.compile(r"нет (?:доступ|данн|статистик|расход|сумм)|не найд[её]н|не наш[её]л|не хватает|пробел|no (?:data|access)", re.I)
 _LOW_TIME = re.compile(r"врем[ея]|не успева|time", re.I)
 _SALES_ROLE = re.compile(r"(?:продавц|менеджер\w* по продажам|команд\w* продаж)", re.I)
 _NICHE_TERMS = (r"одежд", r"ресторан|общепит|кафе|кофейн", r"спорте|фитнес",
@@ -125,6 +126,8 @@ def _duration_bounds(context: str, minutes) -> tuple[int, int]:
 
 def _applicable_title(title, query, topic, profile):
     title = re.sub(r"\s+", " ", title)
+    if topic == "kpi" and general_staff_kpi(query) and _SALES_ROLE.search(title):
+        return False
     if topic in {"retention", "hiring", "kpi"} and _SALES_ROLE.search(title) and not _SALES_ROLE.search(query):
         return False
     if profile.get("stage") == "launch" and re.search(r"действующ\w+\s+(?:бизнес|кофейн|магазин)", title, re.I):
@@ -295,7 +298,12 @@ def adjustment_for(step, note):
     """Keep retries on the current artifact and adapt the work to the stated blocker."""
     subject = step.get("subject")
     if _BLOCKED.search(note):
-        if subject in {"campaign_metric", "campaign_attribution", "campaign_inputs", "cost_per_order", "campaign_comparison"}:
+        if (subject in {"campaign_metric", "campaign_attribution", "campaign_inputs", "cost_per_order", "cost_per_lead", "campaign_comparison", "campaign_finances", "campaign_romi"}
+                and re.search(r"расход|затрат|сумм", note, re.I)):
+            return ("Для той же кампании и периода проверьте, где сохранилась сумма рекламных расходов. "
+                    "Запишите подтверждённую сумму с источником или конкретный пробел. "
+                    "Не заменяйте неизвестную сумму нулём; расчёт продолжите после проверки входных данных.")
+        if subject in {"campaign_metric", "campaign_attribution", "campaign_inputs", "cost_per_order", "cost_per_lead", "campaign_comparison"}:
             return ("Проверьте один доступный показатель по своей кампании: продажи, заявки или расходы. "
                     "Укажите источник сохранившейся цифры и какое значение ещё нужно получить. "
                     "Если его нельзя восстановить, внесите колонку для будущего учёта.")

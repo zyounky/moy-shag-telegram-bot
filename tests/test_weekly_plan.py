@@ -368,7 +368,8 @@ class WeeklyPlanTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "failed")
         self.assertEqual(self.plan()["steps"][1]["status"], "todo")
         self.assertIn("Доработать действие", self.buttons())
-        self.assertIn("один доступный показатель", self.text())
+        self.assertIn("рекламных расходов", self.text())
+        self.assertIn("нулём", self.text())
 
     def test_plan_finishes_only_after_the_last_action_is_verified(self):
         self.bootstrap()

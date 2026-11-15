@@ -63,6 +63,49 @@ def _query_tokens(text):
     return tokens
 
 
+_AD_SUBJECT = r"(?:реклама|кампания|объявление|она|оно)"
+_AD_OUTCOME_QUESTION = re.compile(
+    rf"как (?:понять|узнать|проверить|оценить),?\s+(?:работает ли (?P<working>{_AD_SUBJECT})|"
+    rf"(?:приводит|привела|приносит|принесла|да[её]т) ли (?P<outcome>{_AD_SUBJECT}) "
+    r"(?:новых? )?(?:гостей|клиентов|покупателей|заказы|заявки|звонки|брони|визиты))", re.I
+)
+_AD_RESULT_QUESTION = re.compile(
+    r"как (?:измерить|оценить|проверить|посчитать) (?:е[её]|его) (?:результат|эффективность)", re.I
+)
+_AD_RUNNING = re.compile(
+    r"\b(?:реклама|кампания|объявление)\s+(?:уже\s+)?(?:ид[её]т|запущен[ао]?|работает)\b"
+    r"|\bзапустил[аи]?\s+(?:рекламу|кампанию|объявление)\b", re.I
+)
+_AD_CHANNEL = re.compile(
+    r"\b(?:реклам\w*|кампани\w*|объявлени\w*)\s+(?:на|в|через|для)\s+\w+", re.I
+)
+_AD_CONSTRAINT = re.compile(r"\bбез\s+(?:бюджет\w*|доступ\w*|статистик\w*|данных)\b", re.I)
+_GLOSSARY_ACRONYM = re.compile(r"^([А-ЯЁA-Z]{2,8})(?:\s*[(:—–-]|$)|\(([А-ЯЁA-Z]{2,8})\)\s*$")
+_BROAD_TOPICS = {"маркетинг", "реклама", "продажи", "финансы", "сотрудники", "учет"}
+
+
+def _literal_term(text):
+    return " ".join(text.strip().strip("?! .").casefold().replace("ё", "е").split())
+
+
+def _focus_ad_question(query: str) -> str:
+    """Resolve a generic measurement question without discarding named constraints."""
+    clauses = re.split(r"(?<=[.!?])\s+|\n+", query.strip())
+    question = clauses[-1].rstrip("?! .")
+    outcome = _AD_OUTCOME_QUESTION.fullmatch(question)
+    refers_to_ad = outcome and (outcome["working"] or outcome["outcome"]).casefold() not in ("она", "оно")
+    if not refers_to_ad:
+        if not (outcome or _AD_RESULT_QUESTION.fullmatch(question)):
+            return query
+        if len(clauses) < 2 or not _AD_RUNNING.search(clauses[-2]):
+            return query
+    if (any("?" in clause for clause in clauses[:-1]) or re.search(r"\b[А-ЯЁA-Z]{2,5}\b", query)
+            or _AD_CHANNEL.search(query) or _AD_CONSTRAINT.search(query)
+            or set(_tokens(query)) & (SPECIFIC | {"маркетплейс", "налог"})):
+        return query
+    return "Как оценить эффективность рекламы?"
+
+
 @dataclass(frozen=True)
 class Evidence:
     title: str
@@ -95,6 +138,7 @@ class SearchResult:
     evidence: tuple[Evidence, ...] = ()
     recommendations: tuple[Material, ...] = ()
     needs_clarification: bool = False
+    exact_definition: bool = False
 
 
 class Catalog:
@@ -111,6 +155,7 @@ class Catalog:
         self._chunks = []
         self._postings = defaultdict(set)
         self._df = Counter()
+        self._glossary_terms = defaultdict(set)
         for row in rows:
             kind, url, price = row["kind"], row["url"], row["price"]
             if kind not in PREFIXES or type(price) is not int or price < 0 or not row.get("title"):
@@ -144,6 +189,12 @@ class Catalog:
                     self._postings[term].add(chunk_id)
             self._df.update(doc["terms"])
             self._docs.append(doc)
+            if kind == "glossary" and doc["chunks"]:
+                title_term = _literal_term(row["title"])
+                self._glossary_terms[title_term].add(doc_id)
+                acronym = _GLOSSARY_ACRONYM.search(row["title"].strip())
+                if acronym:
+                    self._glossary_terms[_literal_term(acronym[1] or acronym[2])].add(doc_id)
         self._avg_length = sum(c["length"] for c in self._chunks) / max(1, len(self._chunks))
         self.article_count = sum(d["row"]["kind"] == "article" and bool(d["chunks"]) for d in self._docs)
         self.text_material_count = sum(bool(d["chunks"]) for d in self._docs)
@@ -216,7 +267,25 @@ class Catalog:
                     size += len(units[i]) + 1
         return "\n".join(units[i] for i in sorted(selected))
 
-    def search(self, query, context=None):
+    def search(self, query: str, context: dict[str, str] | None = None) -> SearchResult:
+        term = _literal_term(query)
+        exact_definitions = self._glossary_terms.get(term, ())
+        if len(exact_definitions) == 1 and term not in _BROAD_TOPICS:
+            return self._search(query, context, exact_definition=next(iter(exact_definitions)))
+        focused = _focus_ad_question(query)
+        if focused != query:
+            goal = (context or {}).get("goal", "")
+            if isinstance(goal, str) and goal.startswith("число "):
+                metric = goal.removeprefix("число ")
+                result = self._search(f"эффективность рекламы {metric}", context)
+                if result.evidence:
+                    return result
+            result = self._search(focused, context)
+            if result.evidence:
+                return result
+        return self._search(query, context)
+
+    def _search(self, query, context=None, *, exact_definition=None):
         query = re.sub(r"простыми словами|простым языком|понятным языком", "", query, flags=re.I)
         original = set(_tokens(query))
         if "сотрудник" in original and "удержать" in original:
@@ -231,7 +300,7 @@ class Catalog:
             return SearchResult(needs_clarification=True)
         context = context or {}
         specific = original & SPECIFIC
-        define = bool(re.search(r"что такое|что значит|объясни|определение", query, re.I))
+        define = exact_definition is not None or bool(re.search(r"что такое|что значит|объясни|определение", query, re.I))
         procedure = not define and bool(re.search(r"\bкак\b|с чего|порядок|инструкц|этап|раздел|что делать", query, re.I))
         candidates = set().union(*(self._postings.get(t, set()) for t in terms))
         chunk_scores = defaultdict(list)
@@ -251,6 +320,8 @@ class Catalog:
         stage_terms = set(_tokens({"готовится к запуску": "запуск открытие начинающий",
                                   "уже работает": "действующий работает", "развивается": "развитие масштабирование"}.get(stage, "")))
         for doc_id, doc in enumerate(self._docs):
+            if exact_definition is not None and doc_id != exact_definition:
+                continue
             if specific - doc["terms"]:
                 continue
             coverage = sum(self._idf(t) for t in original & doc["terms"]) / original_weight
@@ -311,5 +382,6 @@ class Catalog:
             reason = "Подходит к текущему этапу бизнеса." if stage_terms & self._docs[doc_id]["meta"].keys() else "Подходит к теме запроса."
             selected.append(Material(row["title"], row["url"], row["kind"], price_display,
                                      row.get("description", ""), reason, price, access))
-        vague = len(original) == 1 and not define and len(WORDS.findall(query)) <= 2
-        return SearchResult(tuple(evidence), tuple(selected), vague)
+        vague = (len(original) == 1 and not define and len(WORDS.findall(query)) <= 2
+                 and (bool(cards) or _literal_term(query) in _BROAD_TOPICS))
+        return SearchResult(tuple(evidence), tuple(selected), vague, exact_definition is not None)

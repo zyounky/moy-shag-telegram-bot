@@ -5,7 +5,7 @@ from functools import partial
 from html import escape
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .advice import STAGES, catalog_context, compose_advice, infer_profile
+from .advice import SECTORS, STAGES, catalog_context, compose_advice, infer_profile
 from .progress import DraftReply
 from .privacy import has_personal_disclosure
 from .query_language import russian_search_query
@@ -196,19 +196,18 @@ class Assistant:
         context = catalog_context(state.profile)
         bits = [context["sector"], context["stage"], context["goal"]]
         profile = " · ".join(t(v) for v in bits if v) or t("Пока пусто")
-        self.send(chat, f"<b>{t('Мой бизнес')}</b>\n{h(profile)}\n\n"
+        zone = state.profile.get("timezone", "Europe/Moscow")
+        self.send(chat, f"<b>{t('Мой бизнес')}</b>\n{h(profile)}\n"
+                        f"{t('Часовой пояс')}: {h(t(TIME_ZONES.get(zone, zone)))}\n\n"
                         + t("Выберите этап бизнеса. Сферу можно указать в следующем вопросе."),
-                  [[b] for b in STAGE_BUTTONS[:3]] + [[button("Очистить профиль", "profile:reset")]] + CONTROLS)
+                  [[b] for b in STAGE_BUTTONS[:3]] + [[button("Выбрать сферу", "profile:sector")],
+                                                   [button("Очистить профиль", "profile:reset")]] + CONTROLS)
 
     def _clarify(self, chat, state, question):
         state.pending = {"kind": "clarify", "query": question}
         self.conversations.save(chat, state)
-        if state.profile.get("stage"):
-            self.send(chat, "Какой результат нужен сейчас? Например, проверить спрос, "
-                            "привлечь клиентов или разобраться в учёте.", CONTROLS)
-        else:
-            self.send(chat, "Выберите этап бизнеса или расскажите подробнее.",
-                      [[b] for b in STAGE_BUTTONS] + CONTROLS)
+        self.send(chat, "Какой результат нужен сейчас? Например, проверить спрос, "
+                        "привлечь клиентов или разобраться в учёте.", CONTROLS)
 
     def answer(self, chat, state, question: str, clarified: bool = False, obstacle: str = ""):
         if not question:
@@ -242,7 +241,8 @@ class Assistant:
         if self.chooser:
             evidence = self.chooser.choose(search_query, context, result.evidence)
         advice = compose_advice(search_query, evidence, state.profile, search_obstacle)
-        live_preview = self.generator and callable(getattr(self.api, "edit", None))
+        use_generator = self.generator is not None and not result.exact_definition
+        live_preview = use_generator and callable(getattr(self.api, "edit", None))
         reply = DraftReply(self.api, chat, t("Ответ формируется…")) if live_preview else None
 
         def finish(message, rows):
@@ -252,7 +252,7 @@ class Assistant:
                 return reply.finish(message, rows)
             return self.api.send(chat, message, rows)
 
-        if self.generator:
+        if use_generator:
             language_options = {"language": "en"} if state.language == "en" else {}
             generated = self.generator.generate(search_query, state.profile, result.evidence,
                                                 obstacle=obstacle, is_demo=self.catalog.is_demo, chat_id=chat,
@@ -327,6 +327,9 @@ class Assistant:
                 rows.append([link(t("Источник") + ": " + title[:35], url)])
         rows.append([button("Начать задачу", f"action:take:{action['id']}")])
         self.add_recommendations(result, sections, rows, t, advice.url, advice.title)
+        hint = ("Откройте «Моя задача» → «Последний совет», чтобы вернуться к этому совету."
+                if state.action else "К этому совету можно вернуться через «Моя задача».")
+        sections.append(f"<i>{t(hint)}</i>")
         rows.extend(CONTROLS)
         finish("\n\n".join(sections), rows)
 
@@ -354,14 +357,14 @@ class Assistant:
             if item.url:
                 rows.append([link("Подробнее о курсе" if item.kind == "course" else "Открыть материал", item.url)])
 
-    def show_action(self, chat, state):
-        action = state.action or state.proposal
+    def show_action(self, chat, state, *, show_proposal=False):
+        action = state.proposal if show_proposal else state.action or state.proposal
         if not action:
             return self.send(chat, "Задайте вопрос, чтобы выбрать первый шаг.",
                              [[button("Задать вопрос", "menu:ask")]] + CONTROLS)
         t = partial(ui_text, state.language)
         action_id = action["id"]
-        status = {"suggested": "Предложен", "active": "В работе", "done": "Выполнен",
+        status = {"suggested": "Совет", "active": "В работе", "done": "Выполнен",
                   "blocked": "Нужна помощь"}.get(action["status"], "")
         rows = [[link("Открыть источник", action["source"])]] if action["source"] else []
         if action["status"] == "suggested":
@@ -370,10 +373,16 @@ class Assistant:
             rows += [[button("Сделано", f"action:done:{action_id}"),
                       button("Не получается", f"action:blocked:{action_id}")],
                      [button("Напомнить", f"action:remind:{action_id}")]]
+        if not show_proposal and state.action and state.proposal:
+            rows.append([button("Последний совет", f"action:suggestion:{state.proposal['id']}")])
+        elif show_proposal and state.action:
+            rows.append([button("Моя задача", "action:show")])
         completion = action.get("completion")
         progress = f"\n\n<b>{t('Как проверить результат')}</b>\n{h(completion)}" if completion else ""
+        note = ("\n\n" + t("Нажмите «Начать задачу», чтобы поставить напоминание или отметить выполнение.")
+                if action["status"] == "suggested" else "")
         self.send(chat, f"<b>{t('Моя задача')} · {h(t(status))}</b>\n{h(action['title'])}{progress}\n\n"
-                        f"{t('Источник')}: {h(action['source_title'])}", rows + CONTROLS)
+                        f"{t('Источник')}: {h(action['source_title'])}{note}", rows + CONTROLS)
 
     def action_callback(self, chat, state, payload: str):
         if payload == "show":
@@ -381,6 +390,8 @@ class Assistant:
         intent, _, action_id = payload.partition(":")
         action = state.action
         proposal = state.proposal
+        if intent == "suggestion" and proposal.get("id") == action_id:
+            return self.show_action(chat, state, show_proposal=True)
         if intent in ("take", "replace") and proposal.get("id") == action_id:
             if intent == "take" and action.get("status") in ("active", "blocked"):
                 return self.send(chat, "У вас уже есть шаг в работе. Заменить его новым?",
@@ -486,7 +497,7 @@ class Assistant:
             lines.append(f"{t('Напоминание №{id}', id=item.id)} · {h(item.title)}\n"
                          f"{h(_format_local(item.next_run, item.timezone, language))} · "
                          f"{t(FREQUENCIES[item.frequency])}")
-            rows.append([button(t("Повтор №{id}", id=item.id), f"manage:edit:{item.id}"),
+            rows.append([button(t("Изменить частоту №{id}", id=item.id), f"manage:edit:{item.id}"),
                          button(t("Отключить №{id}", id=item.id), f"manage:off:{item.id}")])
         self.send(chat, "\n\n".join(lines), rows + add)
 
@@ -569,7 +580,7 @@ class Assistant:
             item = self.reminders.get(chat, reminder_id)
             if not item or not item.active:
                 return self.send(chat, "Напоминание уже завершено или отключено.")
-            return self.send(chat, t("Новая частота для «{title}»?", title=h(item.title)),
+            return self.send(chat, t("Как часто напоминать?\n«{title}»", title=h(item.title)),
                              self.frequency_buttons(language, f"manage:set:{reminder_id}") + CONTROLS)
         if intent == "set" and frequency in FREQUENCIES:
             item = self.reminders.set_frequency(chat, reminder_id, frequency, now=self.now())
@@ -606,6 +617,20 @@ class Assistant:
         if data == "reminders":
             return self.show_reminders(chat)
         if data == "profile:show":
+            return self.show_profile(chat, state)
+        if data == "profile:sector":
+            options = {label: key for key, label in SECTORS.items()}
+            rows = [[button(label, f"sector:{key}")] for label, key in options.items()]
+            return self.send(chat, "Выберите сферу бизнеса.",
+                             rows + [[button("Убрать сферу", "sector:clear"),
+                                      button("Мой бизнес", "profile:show")]])
+        if data.startswith("sector:"):
+            sector = data.partition(":")[2]
+            if sector == "clear":
+                state.profile.pop("sector", None)
+            elif sector in SECTORS:
+                state.profile["sector"] = SECTORS[sector]
+            self.conversations.save(chat, state)
             return self.show_profile(chat, state)
         if data.startswith("stage:"):
             stage = data.partition(":")[2]

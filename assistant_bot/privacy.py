@@ -97,6 +97,11 @@ _MARKERS = (
 )
 _MARKER_PATTERN = "|".join(map(re.escape, _MARKERS))
 _ALL_LABELS = "|".join((_DOC_LABEL, _ID_LABEL, _PHONE_LABEL, _EMAIL_LABEL, _SECRET_LABEL, _DOB_LABEL))
+_SPLIT_PERSONAL_FIELD = re.compile(
+    rf"\b(?:{_ALL_LABELS}|ФИО(?: клиента| сотрудника| пользователя)?|"
+    r"имя(?: и фамилия)?|фамилия|full[ \t]+name|адрес(?: проживания| клиента)?|address)"
+    r"(?!\w)[ \t]*[:=№#—][ \t]*[\r\n]+[ \t\r\n]*\S", re.I,
+)
 # Unrecognized values after explicit field labels may be unusual formatting or free text.
 _UNCLEARED = re.compile(
     rf"\b(?:{_ALL_LABELS})(?!\w){_DELIMITED}(?![ \t]|{_MARKER_PATTERN})(?=\S)", re.I,
@@ -153,7 +158,8 @@ def has_personal_disclosure(text):
 
 def _is_unstructured(value):
     return bool(_PERSONAL.search(value) or _PERSON_CONTEXT.search(value)
-                or _STREET.search(value) or _STREET_EN.search(value))
+                or _STREET.search(value) or _STREET_EN.search(value)
+                or _SPLIT_PERSONAL_FIELD.search(value))
 
 
 def _is_business_quantity(match):

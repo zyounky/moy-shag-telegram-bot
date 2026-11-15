@@ -81,12 +81,17 @@ class OutboundPrivacyTests(unittest.TestCase):
             ("Как рассчитать маржу? Телефон: восемь девятьсот девяносто", {}, ""),
             ("Вопрос о рекламе", {"goal": "ФИО клиента: Иван Иванов"}, ""),
             ("Вопрос о рекламе", {}, "Адрес: Непонятный частный адрес"),
+            ("Паспорт:\n45 01 123456", {}, ""),
+            ("Как посчитать маржу?", {"goal": "Идентификатор клиента:\nsecret-user-key"}, ""),
+            ("Как проверить бюджет?", {}, "Мой адрес:\nМосква, Тверская, д. 10"),
         ]
         for question, profile, obstacle in blocked:
             with self.subTest(question=question):
                 self.assertIsNone(self.generator.generate(question, profile, (SOURCE,), obstacle=obstacle, is_demo=True))
                 self.assertEqual(self.generator.last_status, "privacy")
         source = replace(SOURCE, passage=SOURCE.passage + "\nИмя сотрудника: Иван Иванов.")
+        self.assertIsNone(self.generator.generate("Есть реклама", {}, (source,), is_demo=True))
+        source = replace(SOURCE, passage=SOURCE.passage + "\nПароль:\nprivateCode2468")
         self.assertIsNone(self.generator.generate("Есть реклама", {}, (source,), is_demo=True))
         with patch("assistant_bot.llm.prepare_outbound", side_effect=RuntimeError):
             self.assertIsNone(self.generator.generate("Есть реклама", {}, (SOURCE,), is_demo=True))

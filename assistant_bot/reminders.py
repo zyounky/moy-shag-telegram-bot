@@ -106,6 +106,15 @@ class ReminderStore:
                     ON reminders(next_run, id) WHERE active = 1;
                 CREATE INDEX IF NOT EXISTS reminders_chat
                     ON reminders(chat_id, next_run, id) WHERE active = 1;
+                CREATE TABLE IF NOT EXISTS reminder_actions (
+                    chat_id INTEGER NOT NULL,
+                    action_id TEXT NOT NULL,
+                    request_id TEXT NOT NULL,
+                    reminder_id INTEGER NOT NULL UNIQUE,
+                    PRIMARY KEY (chat_id, request_id)
+                );
+                CREATE INDEX IF NOT EXISTS reminder_actions_by_action
+                    ON reminder_actions(chat_id, action_id);
             """)
 
     def _connect(self) -> sqlite3.Connection:
@@ -124,20 +133,34 @@ class ReminderStore:
         action_label: str | None = None,
         action_url: str | None = None,
         now: datetime | None = None,
+        request_id: str | None = None,
+        action_id: str | None = None,
     ) -> Reminder:
         if frequency not in FREQUENCIES:
             raise ValueError("Unsupported reminder frequency.")
         title = title.strip()
         if not title:
             raise ValueError("Add a title for the reminder.")
+        if bool(request_id) != bool(action_id):
+            raise ValueError("A linked schedule needs both request and action identifiers.")
         zone = ZoneInfo(timezone)
         if scheduled_for.tzinfo is None:
             scheduled_for = resolve_local_time(scheduled_for, timezone)
         starts_at = _utc(scheduled_for)
-        if starts_at <= _utc(now):
-            raise ValueError("The reminder must be scheduled in the future.")
         anchor = starts_at.astimezone(zone).replace(tzinfo=None).isoformat()
         with closing(self._connect()) as connection, connection:
+            if request_id:
+                connection.execute("BEGIN IMMEDIATE")
+                existing = connection.execute(
+                    """SELECT reminders.* FROM reminder_actions
+                       JOIN reminders ON reminders.id = reminder_actions.reminder_id
+                       WHERE reminder_actions.chat_id = ? AND request_id = ? AND action_id = ?""",
+                    (chat_id, request_id, action_id),
+                ).fetchone()
+                if existing is not None:
+                    return _as_reminder(existing)
+            if starts_at <= _utc(now):
+                raise ValueError("The reminder must be scheduled in the future.")
             insert = connection.execute(
                 """INSERT INTO reminders (
                        chat_id, title, next_run, anchor_local, timezone, frequency,
@@ -148,10 +171,39 @@ class ReminderStore:
                     action_label, action_url,
                 ),
             )
+            if request_id:
+                connection.execute("INSERT INTO reminder_actions VALUES (?, ?, ?, ?)",
+                                   (chat_id, action_id, request_id, insert.lastrowid))
             row = connection.execute(
                 "SELECT * FROM reminders WHERE id = ?", (insert.lastrowid,)
             ).fetchone()
             return _as_reminder(row)
+
+    def active_for_action(self, chat_id, action_id):
+        with closing(self._connect()) as connection:
+            return connection.execute(
+                """SELECT 1 FROM reminder_actions JOIN reminders ON reminders.id = reminder_actions.reminder_id
+                   WHERE reminder_actions.chat_id = ? AND action_id = ? AND reminders.active = 1 LIMIT 1""",
+                (chat_id, action_id),
+            ).fetchone() is not None
+
+    def linked_action(self, chat_id, reminder_id):
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT action_id FROM reminder_actions WHERE chat_id = ? AND reminder_id = ?",
+                (chat_id, reminder_id),
+            ).fetchone()
+            return row["action_id"] if row else None
+
+    def disable_for_action(self, chat_id, action_id):
+        with closing(self._connect()) as connection, connection:
+            connection.execute(
+                """UPDATE reminders SET active = 0, lease_token = NULL, lease_until = 0
+                   WHERE chat_id = ? AND id IN (
+                       SELECT reminder_id FROM reminder_actions WHERE chat_id = ? AND action_id = ?
+                   )""",
+                (chat_id, chat_id, action_id),
+            )
 
     def list_active(self, chat_id: int) -> list[Reminder]:
         with closing(self._connect()) as connection:

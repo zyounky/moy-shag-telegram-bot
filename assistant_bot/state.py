@@ -14,6 +14,9 @@ class Conversation:
     proposal: dict = field(default_factory=dict)
     topic: str = ""
     language: str = ""
+    weekly_plan: dict = field(default_factory=dict)
+    plan_offer: dict = field(default_factory=dict)
+    plan_seed: dict = field(default_factory=dict)
 
 
 class ConversationStore:
@@ -40,7 +43,9 @@ class ConversationStore:
         return Conversation(**json.loads(record[0])) if record else Conversation()
 
     def save(self, chat_id: int, conversation: Conversation):
-        payload = json.dumps(vars(conversation), ensure_ascii=False)
+        fields = {key: value for key, value in vars(conversation).items()
+                  if value or key not in {"weekly_plan", "plan_offer", "plan_seed"}}
+        payload = json.dumps(fields, ensure_ascii=False)
         with closing(self.connect()) as connection, connection:
             connection.execute("""
                 INSERT INTO conversations (chat_id, content) VALUES (?, ?)

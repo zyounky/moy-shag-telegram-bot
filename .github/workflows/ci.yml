@@ -48,9 +48,10 @@ jobs:
           docker compose run --rm --no-deps -T bot --demo --check
           printf '/click lang:en\n/help\n' | docker compose run --rm --no-deps -T bot --demo > first-run.log
           grep -F 'Help and commands' first-run.log
-          printf '/reminders\n' | docker compose run --rm --no-deps -T bot --demo > next-run.log
+          printf '/reminders\n/plan\n' | docker compose run --rm --no-deps -T bot --demo > next-run.log
           grep -F 'My Next Step' next-run.log
           grep -F 'You have no active reminders.' next-run.log
+          grep -F 'Ask a business question to make a weekly plan.' next-run.log
       - name: Remove CI containers and volumes
         if: always()
         run: docker compose down -v

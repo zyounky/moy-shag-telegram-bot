@@ -209,6 +209,14 @@ def _prepare(value, limit):
     return clean
 
 
+def prepare_plan_note(text, limit=300):
+    """Accept a short business note after applying the same local filter."""
+    clean = _prepare(text, limit).strip()
+    if not clean or any(marker in clean for marker in _MARKERS):
+        raise PrivacyRejected("Use a short note with aggregate business data")
+    return clean
+
+
 def prepare_outbound(question, profile, obstacle, evidence):
     """Filter full input before applying the existing public API field limits."""
     return {

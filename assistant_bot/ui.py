@@ -1,6 +1,94 @@
 """English copy for Telegram screens and controls. Catalog content is separate."""
 
+from html import escape
+
+
+def button(label: str, callback: str) -> dict:
+    return {"text": label, "callback_data": callback}
+
+
+def link(label: str, url: str) -> dict:
+    return {"text": label, "url": url}
+
+
+def html_text(value) -> str:
+    return escape(str(value), quote=False)
+
 ENGLISH = {
+    "План на неделю": "Weekly plan",
+    "Составить план на неделю": "Make a weekly plan",
+    "15 минут": "15 minutes",
+    "30 минут": "30 minutes",
+    "60 минут": "60 minutes",
+    "Предложение плана на неделю": "Your proposed weekly plan",
+    "План на паузе": "Plan paused",
+    "План отменён": "Plan cancelled",
+    "План завершён": "Plan complete",
+    "Цель": "Goal",
+    "Выполнено {done} из {total} действий.": "{done} of {total} actions complete.",
+    "День {day}": "Day {day}",
+    "Ожидает": "To do",
+    "Проверьте результат": "Check the result",
+    "Нужна доработка": "Needs more work",
+    "Отложено": "Deferred",
+    "Выполнено": "Complete",
+    "Материалов хватило на часть плана. Остальное можно уточнить отдельным вопросом.": "The available material supports part of this plan. You can ask about the remaining details.",
+    "Начать план": "Start plan",
+    "Отказаться": "Decline",
+    "Продолжить план": "Resume plan",
+    "Отменить план": "Cancel plan",
+    "Приостановить план": "Pause plan",
+    "Ближайшее действие": "Next action",
+    "Открыть действие": "Open action",
+    "Продолжить действие": "Resume action",
+    "Начать действие": "Start action",
+    "Посмотреть новый план": "See the new plan",
+    "К плану": "Back to plan",
+    "Зачем": "Why it matters",
+    "Что сделать": "What to do",
+    "Примерно {minutes} мин.": "About {minutes} min.",
+    "Как получилось?": "How did it go?",
+    "Получилось": "It worked",
+    "Получилось частично": "It partly worked",
+    "Не получилось": "It didn't work",
+    "Отложить": "Do later",
+    "Доработка": "Adjustment",
+    "Доработать действие": "Try a smaller version",
+    "Следующее действие": "Next action",
+    "Ваш результат": "Your result",
+    "Подходящий материал": "Suggested material",
+    "Все действия плана пройдены.": "You've completed all the actions in your plan.",
+    "Подходящего нового материала пока нет.": "I couldn't find another relevant resource yet.",
+    "Можно составить недельный план по последнему совету.": "You can turn your latest suggestion into a weekly plan.",
+    "Задайте вопрос о бизнесе, чтобы составить план на неделю.": "Ask a business question to make a weekly plan.",
+    "Этот совет уже недоступен. Откройте план или задайте новый вопрос.": "This suggestion is no longer available. Open your plan or ask another question.",
+    "Сколько времени вы готовы выделять в день? Можно ввести свой ответ.": "How much time can you spend each day? You can type your own answer.",
+    "Пока не знаю": "I'm not sure yet",
+    "Для плана пока мало подходящих материалов.": "I don't have enough relevant material to make a plan yet.",
+    "Сначала зафиксируйте, каких данных не хватает. Используйте один доступный показатель или соберите недостающее значение.": "List the information you're missing first. Use one metric you can access or collect the missing information.",
+    "Возьмите один пример из действия и проверьте его за один короткий подход.": "Pick one example and work through it in a short session.",
+    "Сузьте действие до одного примера. Сверьте его с критерием выполнения и запишите, чего ещё не хватает.": "Try one example, compare it with the completion criterion, and write down what's still missing.",
+    "Коротко опишите результат. Можно указать общие числа, например число заявок.": "Briefly describe what happened. You can include totals such as the number of leads.",
+    "Что помешало? Напишите коротко, чтобы подобрать доработку.": "What got in the way? A brief note can help me suggest a smaller step.",
+    "Напишите только короткий итог и общие числа, без личных данных.": "Enter a short summary and aggregate figures only. Leave out personal information.",
+    "Сначала запишите результат или пропустите этот вопрос.": "Record the result or skip this question first.",
+    "Укажите разумное время в день, например «30 минут».": "Enter how much time you have per day, for example “30 minutes”.",
+    "Эта кнопка относится к предыдущему плану.": "That button belongs to an earlier plan.",
+    "Эта кнопка относится к предыдущему действию.": "That button belongs to an earlier action.",
+    "Действие отложено. Вернитесь к нему, когда будет удобно.": "Action deferred. Return to it when you have time.",
+    "Предложение плана закрыто.": "Plan suggestion dismissed.",
+    "У вас уже есть план или задача. Заменить их новым планом?": "You have a plan or task in progress. Replace it with the new plan?",
+    "Заменить и начать": "Replace and start",
+    "Заменить план": "Replace plan",
+    "Начать эту задачу вместо текущего плана?": "Start this task in place of your current plan?",
+    "Напоминания по действию выключены. После продолжения их можно поставить снова.": "Action reminders are off. You can set them again when you resume.",
+    "Эта кнопка относится к предыдущему напоминанию.": "That button belongs to an earlier reminder.",
+    "У этого действия уже есть напоминание.": "This action already has a reminder.",
+    "Настройка напоминания уже открыта. Продолжите её или введите /cancel.": "Reminder setup is already open. Continue it or enter /cancel.",
+    "Открыть итог": "View result",
+    "Опишите задачу без персональных сведений.": "Describe your task without personal details.",
+    "Сначала откройте новое предложение и подтвердите замену.": "Open the new plan and confirm the replacement again.",
+    "Записать результат": "Record result",
     "Уберите ФИО, адреса и личные документы из сообщения. Опишите бизнес-задачу без персональных данных.": "Remove names, addresses and personal documents. Describe the business question without personal data.",
     "Сейчас много запросов. Дождитесь ответа на предыдущие сообщения и попробуйте ещё раз.": "There are too many requests. Wait for your previous replies and try again.",
     "Задать вопрос": "Ask a question",
@@ -146,6 +234,7 @@ SCREENS = {
         "help": "<b>Помощь и команды</b>\n"
                 "/start или /menu — главное меню\n"
                 "/step — открыть мою задачу\n"
+                "/plan — открыть план на неделю\n"
                 "/profile — настройки моего бизнеса\n"
                 "/remind — создать напоминание\n"
                 "/reminders — открыть напоминания\n"
@@ -157,7 +246,8 @@ SCREENS = {
                  "• Находит материалы «Альфа-Курса» по вашему вопросу и показывает источник.\n"
                  "• Учитывает этап и сферу бизнеса, предлагает один шаг и по возможности критерий результата.\n"
                  "• Помогает вернуться к шагу, если вы застряли.\n"
-                 "• Напоминает о выбранном шаге, обучении или бизнес-событии.",
+                 "• Напоминает о выбранном шаге, обучении или бизнес-событии.\n"
+                 "• Помогает составить план на неделю и проверить итог действий.",
         "current_step": "<b>В работе</b>\n{step}",
     },
     "en": {
@@ -168,6 +258,7 @@ SCREENS = {
         "help": "<b>Help and commands</b>\n"
                 "/start or /menu — main menu\n"
                 "/step — open your task\n"
+                "/plan — open your weekly plan\n"
                 "/profile — your business details\n"
                 "/remind — create a reminder\n"
                 "/reminders — view reminders\n"
@@ -179,7 +270,8 @@ SCREENS = {
                  "• Find relevant Alfa Course material and show the source.\n"
                  "• Use your business stage and sector to suggest a next step and, when possible, a way to check the result.\n"
                  "• Help you get back on track when you're stuck.\n"
-                 "• Remind you about your next step, learning, or a business event.",
+                 "• Remind you about your next step, learning, or a business event.\n"
+                 "• Help you make a weekly plan and review what worked.",
         "current_step": "<b>In progress</b>\n{step}",
     },
 }

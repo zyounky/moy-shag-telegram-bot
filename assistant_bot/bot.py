@@ -2,15 +2,17 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from html import escape
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .advice import SECTORS, STAGES, catalog_context, compose_advice, infer_profile
 from .progress import DraftReply
-from .privacy import has_personal_disclosure
+from .privacy import PrivacyRejected, has_personal_disclosure, prepare_plan_note
 from .query_language import russian_search_query
 from .reminders import resolve_local_time
-from .ui import SCREENS, text as ui_text
+from .ui import SCREENS, button, html_text as h, link, text as ui_text
+from .weekly_flow import OPEN_PLANS, WeeklyFlow
+from .weekly_plan import offerable
 
 
 LOG = logging.getLogger(__name__)
@@ -33,24 +35,13 @@ MENU = [
     [{"text": "Задать вопрос", "callback_data": "menu:ask"}],
     [{"text": "Моя задача", "callback_data": "action:show"},
      {"text": "Напоминания", "callback_data": "reminders"}],
+    [{"text": "План на неделю", "callback_data": "plan:open"}],
     [{"text": "Помощь", "callback_data": "menu:help"},
      {"text": "Что я умею", "callback_data": "menu:about"}],
     [{"text": "Мой бизнес", "callback_data": "profile:show"},
      {"text": "Язык", "callback_data": "lang:show"}],
 ]
 CONTROLS = [[{"text": "Назад в меню", "callback_data": "menu:home"}]]
-
-
-def button(label: str, callback: str) -> dict:
-    return {"text": label, "callback_data": callback}
-
-
-def link(label: str, url: str) -> dict:
-    return {"text": label, "url": url}
-
-
-def h(text) -> str:
-    return escape(str(text), quote=False)
 
 
 def continued_question(question, reply):
@@ -83,6 +74,7 @@ class Assistant:
         self.chooser = chooser
         self.generator = generator
         self.now = now or (lambda: datetime.now(UTC))
+        self.week = WeeklyFlow(self)
 
     def send(self, chat: int, message: str, rows=None, *, language=None):
         if language is None:
@@ -154,6 +146,8 @@ class Assistant:
         elif verb == "/language":
             self.show_language(chat)
         elif verb == "/cancel":
+            if self.week.valid_note(state):
+                return self.week.save_note(chat, state, self.week.linked_step(state), "")
             state.pending.clear()
             self.conversations.save(chat, state)
             self.send(chat, "Действие отменено.", CONTROLS)
@@ -161,6 +155,8 @@ class Assistant:
             self.show_reminders(chat)
         elif verb == "/step":
             self.show_action(chat, state)
+        elif verb == "/plan":
+            self.week.open(chat, state)
         elif verb == "/profile":
             self.show_profile(chat, state)
         elif verb == "/remind":
@@ -173,6 +169,11 @@ class Assistant:
             self.begin_reminder(chat, state, title[:150] or None)
         elif state.pending.get("kind") == "reminder":
             self.reminder_text(chat, state, text)
+        elif state.pending.get("kind") in {"weekly_capacity", "weekly_details", "weekly_note"}:
+            if is_new_question(text):
+                state.pending.clear()
+                return self.answer(chat, state, text[:600])
+            self.week.message(chat, state, text)
         elif state.pending.get("kind") in ("clarify", "obstacle"):
             is_obstacle = state.pending["kind"] == "obstacle"
             obstacle = text if is_obstacle else state.pending.get("obstacle", "")
@@ -282,6 +283,19 @@ class Assistant:
                     if item.url:
                         rows.append([link("Открыть материал", item.url)])
                 self.add_recommendations(result, sections, rows, t)
+                if (status in {"unavailable", "disabled", "expired", "budget"} and not advice.regulated
+                        and offerable(question)):
+                    try:
+                        safe_question = prepare_plan_note(question, 750)
+                        safe_obstacle = prepare_plan_note(obstacle) if obstacle else ""
+                    except PrivacyRejected:
+                        pass
+                    else:
+                        seed = self.conversations.new_action(advice.action, advice.passage, advice.url)
+                        seed.update(subject=safe_question, source_title=advice.title,
+                                    completion=advice.completion, plan_obstacle=safe_obstacle)
+                        state.plan_seed = seed
+                        rows.append([button("Составить план на неделю", f"plan:draft:{seed['id']}")])
                 unique_rows = []
                 seen_urls = set()
                 for row in rows:
@@ -299,7 +313,11 @@ class Assistant:
         action["source_title"] = advice.title
         action["subject"] = question
         action["completion"] = advice.completion
+        action["plan_eligible"] = not advice.regulated and not result.exact_definition and offerable(question)
+        if obstacle:
+            action["plan_obstacle"] = obstacle[:300]
         state.proposal = action
+        state.plan_seed = {}
         self.conversations.save(chat, state)
 
         sections = []
@@ -326,6 +344,8 @@ class Assistant:
             if url and url != advice.url and all(row[0].get("url") != url for row in rows):
                 rows.append([link(t("Источник") + ": " + title[:35], url)])
         rows.append([button("Начать задачу", f"action:take:{action['id']}")])
+        if action["plan_eligible"]:
+            rows.append([button("Составить план на неделю", f"plan:draft:{action['id']}")])
         self.add_recommendations(result, sections, rows, t, advice.url, advice.title)
         hint = ("Откройте «Моя задача» → «Последний совет», чтобы вернуться к этому совету."
                 if state.action else "К этому совету можно вернуться через «Моя задача».")
@@ -358,6 +378,11 @@ class Assistant:
                 rows.append([link("Подробнее о курсе" if item.kind == "course" else "Открыть материал", item.url)])
 
     def show_action(self, chat, state, *, show_proposal=False):
+        if not show_proposal and state.weekly_plan.get("status") in OPEN_PLANS:
+            step = self.week.linked_step(state)
+            if step and state.weekly_plan["status"] == "active" and step["status"] in {"active", "review", "partial", "failed"}:
+                return self.week.show_work(chat, state, step)
+            return self.week.open(chat, state)
         action = state.proposal if show_proposal else state.action or state.proposal
         if not action:
             return self.send(chat, "Задайте вопрос, чтобы выбрать первый шаг.",
@@ -369,6 +394,8 @@ class Assistant:
         rows = [[link("Открыть источник", action["source"])]] if action["source"] else []
         if action["status"] == "suggested":
             rows.append([button("Начать задачу", f"action:take:{action_id}")])
+        if self.week.seed(state, action_id):
+            rows.append([button("Составить план на неделю", f"plan:draft:{action_id}")])
         if action["status"] in ("active", "blocked"):
             rows += [[button("Сделано", f"action:done:{action_id}"),
                       button("Не получается", f"action:blocked:{action_id}")],
@@ -387,12 +414,21 @@ class Assistant:
     def action_callback(self, chat, state, payload: str):
         if payload == "show":
             return self.show_action(chat, state)
-        intent, _, action_id = payload.partition(":")
+        intent, _, data = payload.partition(":")
+        action_id, _, confirmation = data.partition(":")
         action = state.action
         proposal = state.proposal
         if intent == "suggestion" and proposal.get("id") == action_id:
             return self.show_action(chat, state, show_proposal=True)
         if intent in ("take", "replace") and proposal.get("id") == action_id:
+            existing_plan = state.weekly_plan
+            if existing_plan.get("status") in OPEN_PLANS:
+                expected = f"{existing_plan['id']}:{action.get('id', '')}"
+                if intent == "take" or confirmation != expected:
+                    return self.send(chat, "Начать эту задачу вместо текущего плана?",
+                                     [[button("Заменить план", f"action:replace:{action_id}:{expected}"),
+                                       button("Оставить как есть", "plan:open")]])
+                self.week.cancel_for_replacement(chat, state)
             if intent == "take" and action.get("status") in ("active", "blocked"):
                 return self.send(chat, "У вас уже есть шаг в работе. Заменить его новым?",
                                  [[button("Заменить задачу", f"action:replace:{action_id}"),
@@ -404,6 +440,8 @@ class Assistant:
             return self.show_action(chat, state)
         if not action or action["id"] != action_id:
             return self.send(chat, "Это действие относится к предыдущему шагу.", CONTROLS)
+        if action.get("plan_id") and intent in {"remind", "done", "blocked"}:
+            return self.week.finish_action(chat, state, intent)
         if intent == "remind" and action["status"] in ("active", "blocked"):
             return self.begin_reminder(chat, state, action["title"], action)
         if intent == "done" and action["status"] in ("active", "blocked"):
@@ -422,16 +460,26 @@ class Assistant:
         return self.show_action(chat, state)
 
     def disable_action_reminders(self, chat, action):
+        if action.get("plan_id"):
+            self.reminders.disable_for_action(chat, action["id"])
         for reminder_id in action.get("reminder_ids", []):
             self.reminders.disable(chat, reminder_id)
 
     def begin_reminder(self, chat, state, title=None, action=None):
+        if action and action.get("plan_id"):
+            if self.reminders.active_for_action(chat, action["id"]):
+                return self.send(chat, "У этого действия уже есть напоминание.",
+                                 [[button("К напоминаниям", "reminders")]] + CONTROLS)
+            if state.pending.get("reminder_token") and state.pending.get("action_id") == action["id"]:
+                return self.send(chat, "Настройка напоминания уже открыта. Продолжите её или введите /cancel.")
         state.pending = {"kind": "reminder", "step": "type"}
         if title:
             state.pending["title"] = title
         if action:
             state.pending.update(step="when", action_label="Открыть источник", action_url=action["source"],
                                  action_id=action["id"])
+            if action.get("plan_id"):
+                state.pending.update(reminder_token=uuid4().hex[:10], plan_id=action["plan_id"])
             return self.ask_when(chat, state)
         self.conversations.save(chat, state)
         self.send(chat, "О чём напомнить?",
@@ -447,7 +495,7 @@ class Assistant:
         t = partial(ui_text, state.language)
         zone_name = t(TIME_ZONES.get(timezone, timezone))
         example = (self.now().astimezone(ZoneInfo(timezone)) + timedelta(days=1)).replace(hour=19, minute=0)
-        self.send(chat, t("Когда напомнить? Часовой пояс — <b>{zone}</b>. "
+        self.send_reminder(chat, state, t("Когда напомнить? Часовой пояс — <b>{zone}</b>. "
                           "Введите дату и время, например <code>{example}</code>.",
                           zone=h(zone_name), example=f"{example:%d.%m.%Y %H:%M}"),
                   [[button("Через минуту", "rem:in:1"), button("Завтра в 19:00", "rem:in:tomorrow")],
@@ -459,7 +507,7 @@ class Assistant:
             return self.send(chat, "Это время уже прошло. Укажите будущее время.")
         pending.update(step="frequency", scheduled_for=timestamp.isoformat())
         self.conversations.save(chat, state)
-        self.send(chat, "Как часто напоминать?",
+        self.send_reminder(chat, state, "Как часто напоминать?",
                   self.frequency_buttons(state.language, "rem:freq")
                   + [[button("Поменять время", "rem:when"), button("Отмена", "rem:cancel")]])
 
@@ -503,10 +551,18 @@ class Assistant:
 
     def reminder_callback(self, chat, state, payload):
         t = partial(ui_text, state.language)
+        pending = state.pending
+        token = pending.get("reminder_token")
+        if payload.startswith("draft:"):
+            _, _, rest = payload.partition(":")
+            received, _, payload = rest.partition(":")
+            if received != token:
+                return self.send(chat, "Эта кнопка относится к предыдущему напоминанию.", CONTROLS)
+        elif token and payload != "new":
+            return self.send(chat, "Эта кнопка относится к предыдущему напоминанию.", CONTROLS)
         key, _, arg = payload.partition(":")
         if key == "new":
             return self.begin_reminder(chat, state)
-        pending = state.pending
         if pending.get("kind") != "reminder":
             return self.send(chat, "Эта настройка уже закрыта. Откройте /remind, чтобы создать напоминание.")
         step = pending.get("step")
@@ -523,7 +579,7 @@ class Assistant:
                        else "Введите название. Например, «Отправить отчёт».")
             return self.send(chat, example, [[button("Отмена", "rem:cancel")]])
         if key == "tz" and step == "when":
-            return self.send(chat, "Выберите часовой пояс.",
+            return self.send_reminder(chat, state, "Выберите часовой пояс.",
                              [[button(name, f"rem:zone:{tz}")] for tz, name in TIME_ZONES.items()])
         if key == "zone" and arg in TIME_ZONES and step == "when":
             pending["timezone"] = state.profile["timezone"] = arg
@@ -541,28 +597,46 @@ class Assistant:
             pending.update(step="confirm", frequency=arg)
             self.conversations.save(chat, state)
             date = _format_local(datetime.fromisoformat(pending["scheduled_for"]), pending["timezone"], state.language)
-            return self.send(chat, f"<b>{t('Подтвердите напоминание')}</b>\n{h(pending['title'])}\n"
+            return self.send_reminder(chat, state, f"<b>{t('Подтвердите напоминание')}</b>\n{h(pending['title'])}\n"
                                    f"{h(date)} · {t(FREQUENCIES[arg])}",
                              [[button("Сохранить", "rem:confirm"), button("Отмена", "rem:cancel")],
                               [button("Поменять время", "rem:when")]])
         if key == "confirm" and step == "confirm":
+            if token and (pending["action_id"] != state.action.get("id")
+                          or pending["plan_id"] != state.weekly_plan.get("id")
+                          or state.weekly_plan.get("status") != "active"
+                          or state.action.get("status") != "active"):
+                return self.send(chat, "Эта кнопка относится к предыдущему действию.", CONTROLS)
+            linked = {"request_id": token, "action_id": pending["action_id"]} if token else {}
             try:
                 entry = self.reminders.create(
                     chat, pending["title"], datetime.fromisoformat(pending["scheduled_for"]),
                     pending["timezone"], pending["frequency"], action_label=pending.get("action_label"),
-                    action_url=pending.get("action_url"), now=self.now(),
+                    action_url=pending.get("action_url"), now=self.now(), **linked,
                 )
             except ValueError:
                 self.send(chat, "Это время уже прошло. Укажите новое.")
                 return self.ask_when(chat, state)
             if pending.get("action_id") == state.action.get("id") and state.action:
-                state.action.setdefault("reminder_ids", []).append(entry.id)
+                ids = state.action.setdefault("reminder_ids", [])
+                if entry.id not in ids:
+                    ids.append(entry.id)
             state.pending.clear()
             self.conversations.save(chat, state)
             date = h(_format_local(entry.next_run, entry.timezone, state.language))
             return self.send(chat, t("Напоминание №{id} создано. Ближайшая отправка — {date}.",
                                      id=entry.id, date=date),
                              [[button("К напоминаниям", "reminders")]] + CONTROLS)
+
+    def send_reminder(self, chat, state, text, rows):
+        token = state.pending.get("reminder_token")
+        if token:
+            for row in rows:
+                for item in row:
+                    data = item.get("callback_data", "")
+                    if data.startswith("rem:"):
+                        item["callback_data"] = f"rem:draft:{token}:{data.removeprefix('rem:')}"
+        return self.send(chat, text, rows)
 
     def manage_reminder(self, chat, payload):
         language = self.conversations.get(chat).language
@@ -651,6 +725,8 @@ class Assistant:
             return self.send(chat, "Профиль бизнеса очищен.", CONTROLS)
         if data.startswith("action:"):
             return self.action_callback(chat, state, data.removeprefix("action:"))
+        if data.startswith("plan:"):
+            return self.week.callback(chat, state, data.removeprefix("plan:"))
         if data.startswith("rem:"):
             return self.reminder_callback(chat, state, data.removeprefix("rem:"))
         if data.startswith("manage:"):
@@ -664,10 +740,15 @@ class Assistant:
             state = self.conversations.get(item.chat_id)
             t = partial(ui_text, state.language)
             action = state.action
+            linked_action = self.reminders.linked_action(item.chat_id, item.id)
+            if linked_action and (action.get("id") != linked_action or action.get("status") != "active"
+                                  or state.weekly_plan.get("status") != "active"):
+                self.reminders.disable(item.chat_id, item.id)
+                continue
             rows = []
             if item.action_url:
                 rows.append([link(item.action_label or "Открыть материал", item.action_url)])
-            if item.id in action.get("reminder_ids", []) and action.get("status") in ("active", "blocked"):
+            if (linked_action or item.id in action.get("reminder_ids", [])) and action.get("status") in ("active", "blocked"):
                 rows.append([button("Сделано", f"action:done:{action['id']}"),
                              button("Не получается", f"action:blocked:{action['id']}")])
             rows.append([button("К напоминаниям", "reminders")])

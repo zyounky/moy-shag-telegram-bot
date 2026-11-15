@@ -290,6 +290,8 @@ def build_plan(catalog, question: str, profile: dict, *, advice=None, obstacle: 
     if time_limited or topic == "opening":
         result["limitation"] = ("Это черновик части бизнес-плана. Полный анализ рынка и финансовый прогноз потребуют отдельных проверок."
                                 if topic == "opening" else "Действия, которые требуют более длинной сессии, перенесены за пределы этого плана.")
+    elif topic in {"demand", "product_test"}:
+        result["limitation"] = ("Это первичная проверка гипотезы. Небольшой отклик не доказывает объём спроса, продажи или окупаемость; для решения о масштабировании понадобятся дополнительные наблюдения.")
     result.update(steps=steps, incomplete=len(steps) < 3 or time_limited or topic == "opening", topic=topic)
     return result
 

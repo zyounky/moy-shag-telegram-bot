@@ -82,6 +82,13 @@ _AD_CHANNEL = re.compile(
 _AD_CONSTRAINT = re.compile(r"\bбез\s+(?:бюджет\w*|доступ\w*|статистик\w*|данных)\b", re.I)
 _GLOSSARY_ACRONYM = re.compile(r"^([А-ЯЁA-Z]{2,8})(?:\s*[(:—–-]|$)|\(([А-ЯЁA-Z]{2,8})\)\s*$")
 _BROAD_TOPICS = {"маркетинг", "реклама", "продажи", "финансы", "сотрудники", "учет"}
+_TEMPLATE = re.compile(r"^(?:нуж[еаыно]+|ищу|найди|где (?:найти|взять)|дай)\s+"
+                       r"(?:шаблон|бланк|таблиц[ау])\b", re.I)
+_TEMPLATE_FORMATS = {"шаблон", "бланк", "таблица"}
+_IDEA_VALIDATION = re.compile(
+    r"(?:с чего начать проверку|как (?:проверить|протестировать)) (?:сво[юй] )?"
+    r"(?:бизнес[- ])?иде[ию](?: для (?:небольшого|малого|нового) бизнеса)?", re.I
+)
 
 
 def _literal_term(text):
@@ -274,14 +281,12 @@ class Catalog:
             return self._search(query, context, exact_definition=next(iter(exact_definitions)))
         focused = _focus_ad_question(query)
         if focused != query:
-            goal = (context or {}).get("goal", "")
-            if isinstance(goal, str) and goal.startswith("число "):
-                metric = goal.removeprefix("число ")
-                result = self._search(f"эффективность рекламы {metric}", context)
-                if result.evidence:
-                    return result
             result = self._search(focused, context)
             if result.evidence:
+                return result
+        if _IDEA_VALIDATION.fullmatch(term):
+            result = self._search("Customer Development", context)
+            if result.evidence and {"customer", "development"} <= set(_tokens(result.evidence[0].title)):
                 return result
         return self._search(query, context)
 
@@ -346,6 +351,13 @@ class Catalog:
                 ranked.append((score, doc_id, chunks, title_coverage >= .8))
             if score > 0:
                 cards.append((score, doc_id))
+        subject = original - _TEMPLATE_FORMATS
+        if subject and _TEMPLATE.search(query.strip()):
+            requested = {doc_id for _, doc_id in cards if self._docs[doc_id]["row"]["kind"] == "document"
+                         and subject <= self._docs[doc_id]["title"].keys()}
+            if requested:
+                cards = [item for item in cards if item[1] in requested]
+                ranked = [item for item in ranked if item[1] in requested]
         ranked.sort(key=lambda item: (-item[0], self._docs[item[1]]["row"]["title"]))
         evidence = []
         seen = set()

@@ -131,3 +131,12 @@ class CoreScenarioTests(unittest.TestCase):
                               'Получилось частично: заявки есть, но не найдены расходы.')
         self.assertIn('той же кампании',answer)
         self.assertIn('нулём',answer)
+        source=self.catalog([('Как отследить эффективность рекламы',
+                              'Для рекламы сверьте расходы на кампанию и заявки за один период.',
+                              'article','public_text')]).search('Как оценить эффективность рекламы?').evidence[0]
+        advice=compose_advice('Как оценить эффективность рекламы кофейни?',source,{},
+                              'Получилось частично: собраны заявки, но не найдены расходы')
+        self.assertTrue(advice.local_complete)
+        self.assertIn('Повторно собирать',advice.answer)
+        self.assertIn('сумм',advice.completion)
+        self.assertIn('источником',advice.completion)

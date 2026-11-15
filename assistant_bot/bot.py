@@ -264,10 +264,13 @@ class Assistant:
                   [[b] for b in STAGE_BUTTONS[:3]] + [[button("Выбрать сферу", "profile:sector")],
                                                    [button("Очистить профиль", "profile:reset")]] + CONTROLS)
 
-    def _clarify(self, chat, state, question):
-        state.pending = {"kind": "clarify", "query": question}
+    def _clarify(self, chat, state, question, *, prompt=None, obstacle=""):
+        state.pending = {"kind": "clarify", "query": question, "obstacle": obstacle}
         self.conversations.save(chat, state)
-        if tax_regime_needed(russian_search_query(question)):
+        if prompt:
+            if state.language == "en":
+                prompt = "What does your shop sell? This will help me find material for your assortment."
+        elif tax_regime_needed(russian_search_query(question)):
             prompt = ("Which tax regime do you use? If you're unsure, tell me how your business is registered."
                       if state.language == "en" else
                       "Какой налоговый режим вы применяете? Если не знаете, укажите форму регистрации бизнеса.")
@@ -309,6 +312,8 @@ class Assistant:
         if self.chooser:
             evidence = self.chooser.choose(search_query, context, result.evidence)
         advice = compose_advice(search_query, evidence, state.profile, search_obstacle)
+        if advice.clarification and not clarified:
+            return self._clarify(chat, state, question, prompt=advice.clarification, obstacle=obstacle)
         use_generator = (self.generator is not None and not result.exact_definition
                          and not getattr(advice, "local_complete", False))
         public_notice = False

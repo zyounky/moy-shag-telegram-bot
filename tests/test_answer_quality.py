@@ -8,7 +8,7 @@ from assistant_bot.advice import compose_advice, infer_profile
 from assistant_bot.answer_policy import (budget_state, tax_regime_needed, unsupported_claim,
                                          unsupported_scope_claim)
 from assistant_bot.bot import Assistant
-from assistant_bot.knowledge import Catalog, Evidence
+from assistant_bot.knowledge import Catalog, Evidence, SearchResult
 from assistant_bot.llm import COMPACT_PROMPT, SYSTEM_PROMPT, ResponseGenerator
 from assistant_bot.reminders import ReminderStore
 from assistant_bot.state import ConversationStore
@@ -108,6 +108,45 @@ class AnswerQualityTests(unittest.TestCase):
             self.assertIn(metric, advice.answer)
         self.assertIn("пропуски", advice.action)
         self.assertNotIn("окупаемость рассчитана", advice.completion)
+
+    def test_bonus_range_guard_accepts_denials_but_rejects_a_new_universal_recommendation(self):
+        query = "Подойдёт ли порог премии 80–85% всем сотрудникам магазина?"
+        self.assertFalse(unsupported_claim(query, "", "Порог 80–85% нельзя переносить на всех сотрудников."))
+        self.assertFalse(unsupported_claim(query, "", "80–85% — пример для менеджеров по продажам."))
+        self.assertTrue(unsupported_claim(query, "", "Порог 80–85% подходит всем сотрудникам."))
+        self.assertTrue(unsupported_claim(query, "", "Нельзя переносить 80–85% на всех, но установите 80–85% каждому."))
+
+    def test_known_bonus_example_is_answered_locally_without_spending_api_attempt(self):
+        catalog = Mock(is_demo=True, search=Mock(return_value=SearchResult((KPI,))))
+        temporary = TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        path = Path(temporary.name) / "state.db"
+        generator = Mock(public_access=None)
+        outbox = Mock()
+        bot = Assistant(outbox, catalog, ConversationStore(path), ReminderStore(path), generator=generator)
+        bot.message(1, "Подойдёт ли порог премии 80–85% всем сотрудникам магазина, включая кладовщика?")
+        generator.generate.assert_not_called()
+        self.assertIn("нельзя автоматически", outbox.send.call_args.args[1])
+        self.assertTrue(compose_advice("Подойдёт ли порог премии 80–85% всем сотрудникам магазина?", KPI, {}).local_complete)
+
+    def test_mismatched_shop_source_gets_one_clarification_and_preserves_followup(self):
+        source = Evidence("Маркетинг магазина одежды", "", "Для магазина одежды подготовьте предложение для клиентов.")
+        catalog = Mock(is_demo=True, search=Mock(return_value=SearchResult((source,))))
+        temporary = TemporaryDirectory(); self.addCleanup(temporary.cleanup)
+        path = Path(temporary.name) / "state.db"
+        generator = Mock(public_access=None, last_status="unavailable", last_metrics={}, last_clarification="")
+        generator.generate.return_value = None
+        outbox = Mock()
+        store = ConversationStore(path)
+        bot = Assistant(outbox, catalog, store, ReminderStore(path), generator=generator)
+        bot.message(1, "Хочу больше покупателей для магазина. Бюджет пока не указал")
+        generator.generate.assert_not_called()
+        self.assertIn("Что продаёт", outbox.send.call_args.args[1])
+        self.assertEqual(store.get(1).pending["kind"], "clarify")
+        bot.message(1, "Продукты")
+        generator.generate.assert_called_once()
+        self.assertIn("Продукты", generator.generate.call_args.args[0])
+        known = compose_advice("Как привлечь покупателей в магазин продуктов?", source, {})
+        self.assertFalse(known.clarification)
 
     def test_clothing_example_does_not_set_the_stores_assortment(self):
         query = "У меня магазин. Как увеличить повторные продажи?"

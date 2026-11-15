@@ -161,8 +161,18 @@ def unsupported_claim(question, obstacle, output):
     """Spot a few concrete invalid inferences, not general factual accuracy."""
     user = f"{question}\n{obstacle}"
     statements = re.split(r"(?<=[.!?])\s+|\n+", output.casefold())
-    if general_staff_kpi(user) and re.search(r"\b80\s*%?\s*(?:[-–—−]|до)\s*85\s*%", output):
-        return True
+    if general_staff_kpi(user):
+        for statement in statements:
+            for clause in re.split(r";|\bно\b|\bоднако\b|\bbut\b|\bhowever\b", statement):
+                if not re.search(r"\b80\s*%?\s*(?:[-–—−]|до)\s*85\s*%", clause):
+                    continue
+                denial = re.search(r"нельзя|не следует|не подход\w*|не подойд\w*|не универсальн\w*"
+                                   r"|не перенос\w*|не норма|не является\w*[^.]{0,25}норм\w*"
+                                   r"|cannot|not (?:suitable|universal|a rule)|do not apply", clause)
+                example = (sales_staff_title(clause) and re.search(r"пример|только|example|only", clause)
+                           and not re.search(r"всем|для всех|all (?:staff|employees)", clause))
+                if not denial and not example:
+                    return True
     if ad_finance_intent(user) and missing_leads(user) and re.search(
         r"(?:нельзя|невозможно|не получится|нет способа).{0,60}"
         r"(?:romi|roi|roas|окупаемост|прошл\w* (?:эффективност|результат)|восстановить эффективност)"

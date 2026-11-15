@@ -247,7 +247,9 @@ class ResponseGenerator:
         last_preview = 0
         for line in response:
             total += len(line)
-            if total > 1048576 or monotonic() - started > self.timeout:
+            if monotonic() - started > self.timeout:
+                raise TimeoutError("Generation deadline exceeded")
+            if total > 1048576:
                 raise ValueError("Stream limit exceeded")
             if not line.startswith(b"data:"):
                 continue
@@ -442,11 +444,27 @@ class ResponseGenerator:
                     self._cache.popitem(last=False)
             return result_pair
         except HTTPError as error:
+            self.last_metrics.update(error_type="http", http_status=error.code)
             # Never log request/response bodies, API keys, or exception URLs.
             LOG.warning("LLM %s: HTTP %s", self.provider, error.code)
-        except (URLError, OSError, ValueError, TypeError, KeyError, AttributeError, sqlite3.Error):
-            LOG.warning("LLM %s: ответ недоступен или не прошёл проверку",
-                        self.provider)
+        except (URLError, OSError, ValueError, TypeError, KeyError, AttributeError, sqlite3.Error) as error:
+            if isinstance(error, TimeoutError) or (isinstance(error, URLError) and isinstance(error.reason, TimeoutError)):
+                reason = "timeout"
+            elif isinstance(error, sqlite3.Error):
+                reason = "storage"
+            elif isinstance(error, (URLError, OSError)):
+                reason = "network"
+            else:
+                # Only fixed codes are exposed; never log exception text or payload.
+                reason = {"Unsupported contextual claim": "context_validation",
+                          "Unsupported quote": "quote_validation",
+                          "Invalid clarification fields": "clarification_validation",
+                          "Invalid advice text": "text_validation",
+                          "Invalid source": "source_validation",
+                          "Invalid supporting sources": "source_validation",
+                          "Incomplete model response": "provider_incomplete"}.get(str(error), "response_validation")
+            self.last_metrics["error_type"] = reason
+            LOG.warning("LLM %s: ответ недоступен (%s)", self.provider, reason)
         finally:
             if public:
                 public.slots.release()

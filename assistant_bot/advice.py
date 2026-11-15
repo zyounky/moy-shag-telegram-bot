@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 
 from .answer_policy import (ad_finance_intent, break_even_advice, general_staff_kpi,
-                            missing_leads, shop_example_mismatch, unsupported_claim)
+                            missing_leads, sales_staff_title, shop_example_mismatch, unsupported_claim)
 
 
 STAGES = {
@@ -132,6 +132,7 @@ class Advice:
     answer: str = ""
     sources: tuple = ()
     local_complete: bool = False
+    clarification: str = ""
 
 
 def compose_advice(query: str, evidence, profile: dict, obstacle: str = "") -> Advice:
@@ -170,15 +171,28 @@ def compose_advice(query: str, evidence, profile: dict, obstacle: str = "") -> A
                   "Числовые пороги премирования отдела продаж нельзя автоматически переносить на другие роли.")
         action = "Выберите одну роль в команде и запишите её задачу, показатель и способ его измерения."
         completion = "Для одной роли записаны задача, один показатель и источник данных для него."
+        supported_example = (evidence.content_scope == "public_text" and sales_staff_title(evidence.title)
+                             and re.search(r"80\s*%?\s*[-–—]\s*85\s*%", evidence.passage)
+                             and re.search(r"80\s*%?\s*[-–—]\s*85\s*%", query))
+        if supported_example:
+            answer = ("Нет: порог премии из примера для менеджеров по продажам нельзя автоматически "
+                      "переносить на всех сотрудников магазина. Для каждой роли проверьте, влияет ли "
+                      "человек на показатель и как его измерять. Сам пример не подтверждает подходящий "
+                      "порог для другой роли.")
         return Advice(passage, evidence.title, evidence.url, action, context, regulated,
-                      completion, answer, sourced)
+                      completion, answer, sourced, local_complete=bool(supported_example))
     if shop_example_mismatch(query, evidence.title):
         answer = ("Источник описывает магазин одежды. Это пример для конкретного ассортимента. "
                   "Уточните, что продаёт ваш магазин, чтобы проверить применимость совета.")
         action = "Укажите основную категорию товаров и задачу, которую хотите решить."
         completion = "Названы категория товаров и одна задача магазина."
+        assortment_stated = re.search(
+            r"магазин\w*\s+(?!(?:без|с|у|в|на|для|и|уже|пока|как|хочу|бюджет|работает)\b)[а-яёa-z]+",
+            query, re.I)
         return Advice(passage, evidence.title, evidence.url, action, context, regulated,
-                      completion, answer, sourced)
+                      completion, answer, sourced,
+                      clarification=("Что продаёт ваш магазин? Это поможет подобрать материалы по вашему ассортименту."
+                                     if not assortment_stated else ""))
 
     tokens = _words(query)
     candidates = [

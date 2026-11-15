@@ -115,6 +115,16 @@ class GeneratorTests(unittest.TestCase):
         self.assertIsNone(self.generator.generate("Вопрос", {}, (), is_demo=True))
         self.generator.opener.open.assert_not_called()
 
+    def test_failure_codes_distinguish_timeout_and_rejected_quote_without_leaking_details(self):
+        self.generator.opener.open.side_effect = URLError(TimeoutError("private diagnostic"))
+        self.assertIsNone(self.generate(is_demo=True))
+        self.assertEqual(self.generator.last_metrics["error_type"], "timeout")
+        self.assertNotIn("private", json.dumps(self.generator.last_metrics))
+        self.generator.opener.open.side_effect = None
+        self.generator.opener.open.return_value = response_for({**valid_result(), "quote": "Неподтверждённая цитата, которой нет в источнике."})
+        self.assertIsNone(self.generate(is_demo=True))
+        self.assertEqual(self.generator.last_metrics["error_type"], "quote_validation")
+
     def test_multiple_sources_are_validated_and_mapped_to_catalog_links(self):
         second = Evidence("Второй материал", "https://kurs.alfabank.ru/articles/second/", QUOTE)
         result = {**valid_result(), "source_indices": [0, 1]}

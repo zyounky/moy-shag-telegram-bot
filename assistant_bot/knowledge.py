@@ -306,6 +306,13 @@ class Catalog:
         exact_definitions = self._glossary_terms.get(term, ())
         if len(exact_definitions) == 1 and term not in _BROAD_TOPICS:
             return self._search(query, context, exact_definition=next(iter(exact_definitions)))
+        if bonus_example_question(query):
+            example = self._search("порог премии 80 85", context)
+            scoped = tuple(e for e in example.evidence if e.content_scope == "public_text"
+                           and sales_staff_title(e.title)
+                           and re.search(r"80\s*%?\s*(?:[-–—−]|до)\s*85\s*%", e.passage))
+            if scoped:
+                return replace(example, evidence=scoped, needs_clarification=False)
         if tax_regime_needed(query):
             return SearchResult(needs_clarification=True)
         if break_even_intent(query) and not re.search(r"\bв (?:штуках|единицах)\b", query, re.I):

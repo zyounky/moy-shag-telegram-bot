@@ -6,12 +6,15 @@ import json
 import math
 import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pymorphy3
+
+from assistant_bot.answer_policy import (ad_finance_intent, break_even_intent, general_staff_kpi,
+                                         sales_staff_title, staff_retention_intent, tax_regime_needed)
 
 
 DEMO_CATALOG = Path(__file__).with_name("demo_catalog.jsonl")
@@ -163,6 +166,7 @@ class Catalog:
         self._postings = defaultdict(set)
         self._df = Counter()
         self._glossary_terms = defaultdict(set)
+        self._public_materials = {}
         for row in rows:
             kind, url, price = row["kind"], row["url"], row["price"]
             if kind not in PREFIXES or type(price) is not int or price < 0 or not row.get("title"):
@@ -196,6 +200,8 @@ class Catalog:
                     self._postings[term].add(chunk_id)
             self._df.update(doc["terms"])
             self._docs.append(doc)
+            if doc["chunks"] and row.get("content_scope", "public_text") == "public_text":
+                self._public_materials[(url, row["title"], kind, row.get("id", ""))] = doc_id
             if kind == "glossary" and doc["chunks"]:
                 title_term = _literal_term(row["title"])
                 self._glossary_terms[title_term].add(doc_id)
@@ -207,6 +213,27 @@ class Catalog:
         self.text_material_count = sum(bool(d["chunks"]) for d in self._docs)
         self.material_count = len(self._docs)
         self.kind_counts = dict(Counter(d["row"]["kind"] for d in self._docs))
+
+    def public_fragments(self, evidence, pattern):
+        """Find up to three short matching fragments in the same public source."""
+        if evidence.content_scope != "public_text":
+            return ()
+        key = (evidence.url, evidence.title, evidence.kind, evidence.material_id)
+        doc_id = self._public_materials.get(key)
+        if doc_id is None:
+            return ()
+        matches = []
+        for chunk_id in self._docs[doc_id]["chunks"]:
+            chunk = self._chunks[chunk_id]
+            text = re.sub(r"\s+", " ", f"{chunk['heading']}\n{chunk['text']}").strip()
+            if match := pattern.search(text):
+                start = max(0, match.start() - 45)
+                end = min(len(text), match.end() + 115)
+                matches.append(Evidence(evidence.title, evidence.url, text[start:end].strip(),
+                                        chunk["heading"], evidence.kind, evidence.content_scope, evidence.material_id))
+                if len(matches) == 3:
+                    break
+        return tuple(matches)
 
     def _idf(self, term):
         count = self._df.get(term, 0)
@@ -279,6 +306,26 @@ class Catalog:
         exact_definitions = self._glossary_terms.get(term, ())
         if len(exact_definitions) == 1 and term not in _BROAD_TOPICS:
             return self._search(query, context, exact_definition=next(iter(exact_definitions)))
+        if tax_regime_needed(query):
+            return SearchResult(needs_clarification=True)
+        if break_even_intent(query) and not re.search(r"\bв (?:штуках|единицах)\b", query, re.I):
+            result = self._search("Как рассчитать точку безубыточности?", context)
+            if result.evidence:
+                return result
+        if ad_finance_intent(query):
+            explicit_metric = re.search(r"\b(romi|roas|roi)\b", query, re.I)
+            metric = explicit_metric[1].upper() if explicit_metric else "ROMI"
+            result = self._search(metric, context)
+            marker = re.compile(rf"\b{metric}\b", re.I)
+            matching = tuple(e for e in result.evidence if e.content_scope == "public_text"
+                             and marker.search(e.passage))
+            if matching:
+                return replace(result, evidence=matching, needs_clarification=False)
+            return SearchResult(recommendations=result.recommendations)
+        if staff_retention_intent(query):
+            result = self._search("Почему сотрудники увольняются?", context)
+            if result.evidence:
+                return result
         focused = _focus_ad_question(query)
         if focused != query:
             result = self._search(focused, context)
@@ -288,9 +335,15 @@ class Catalog:
             result = self._search("Customer Development", context)
             if result.evidence and {"customer", "development"} <= set(_tokens(result.evidence[0].title)):
                 return result
-        return self._search(query, context)
+        result = self._search(query, context)
+        if not result.evidence and general_staff_kpi(query):
+            for scoped in ("KPI сотрудников", "KPI"):
+                neutral_result = self._search(scoped, context, exclude_sales_roles=True)
+                if neutral_result.evidence:
+                    return replace(neutral_result, needs_clarification=False)
+        return result
 
-    def _search(self, query, context=None, *, exact_definition=None):
+    def _search(self, query, context=None, *, exact_definition=None, exclude_sales_roles=False):
         query = re.sub(r"простыми словами|простым языком|понятным языком", "", query, flags=re.I)
         original = set(_tokens(query))
         if "сотрудник" in original and "удержать" in original:
@@ -319,6 +372,7 @@ class Catalog:
             chunk_scores[chunk["doc"]].append((score, chunk_id))
         ranked = []
         cards = []
+        role_neutral = exclude_sales_roles or general_staff_kpi(query) or staff_retention_intent(query)
         original_weight = sum(self._idf(t) for t in original) or 1
         sector = set(_tokens(context.get("sector", ""))) | query_sector
         stage = context.get("stage", "")
@@ -326,6 +380,8 @@ class Catalog:
                                   "уже работает": "действующий работает", "развивается": "развитие масштабирование"}.get(stage, "")))
         for doc_id, doc in enumerate(self._docs):
             if exact_definition is not None and doc_id != exact_definition:
+                continue
+            if role_neutral and sales_staff_title(doc["row"]["title"]):
                 continue
             if specific - doc["terms"]:
                 continue

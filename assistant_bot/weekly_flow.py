@@ -7,7 +7,7 @@ from uuid import uuid4
 from .privacy import PrivacyRejected, prepare_plan_note
 from .query_language import russian_search_query
 from .ui import button, html_text as h, link, text as ui_text
-from .weekly_plan import build_plan, next_material, offerable
+from .weekly_plan import adjustment_for, build_plan, next_material, offerable
 
 
 OPEN_PLANS = {"active", "paused"}
@@ -148,7 +148,9 @@ class WeeklyFlow:
         lines = [f"<b>{t(titles[status])}</b>", f"{t('Цель')}: {h(plan['goal'])}"]
         done = sum(step["status"] == "done" for step in plan["steps"])
         lines.append(t("Выполнено {done} из {total} действий.", done=done, total=len(plan["steps"])))
-        if plan.get("incomplete"):
+        if plan.get("limitation"):
+            lines.append(h(plan["limitation"]))
+        elif plan.get("incomplete"):
             lines.append(t("Материалов хватило на часть плана. Остальное можно уточнить отдельным вопросом."))
         for step in plan["steps"]:
             title = self.step_text(step, "title", state.language)
@@ -195,8 +197,11 @@ class WeeklyFlow:
                   f"{t('Что сделать')}: {h(self.step_text(step, 'instruction', language))}",
                   f"{t('Как проверить результат')}: {h(self.step_text(step, 'completion', language))}",
                   t("Примерно {minutes} мин.", minutes=step["minutes"])]
-        if step["source"]:
-            detail.append(f"{t('Источник')}: {h(step['source']['title'])}")
+        if source := step.get("source"):
+            title = source["title"]
+            if source.get("heading"):
+                title += " · " + source["heading"]
+            detail.append(f"{t('Источник')}: {h(title)}")
         return "\n".join(detail)
 
     def stop_current(self, chat, state, *, keep=False):
@@ -291,12 +296,12 @@ class WeeklyFlow:
         result = step["results"][-1]
         if note:
             result.update(note=note, metrics=aggregate_metrics(note))
-        source = step["source"]
+        source = step.get("source", {})
         self.record_material(plan, source)
         following = self.current_step(plan)
         material = next_material(self.bot.catalog, plan["question"], state.profile,
                                  step=following if result["outcome"] == "success" else step,
-                                 outcome=result["outcome"], note=note, used=plan["used"])
+                                 outcome=result["outcome"], note=note, used=plan.get("used", ()))
         if material:
             self.record_material(plan, material)
         result["material"] = material
@@ -308,10 +313,11 @@ class WeeklyFlow:
 
     @staticmethod
     def record_material(plan, material):
+        used = plan.setdefault("used", [])
         for key in ("id", "url"):
             value = material.get(key)
-            if value and value not in plan["used"]:
-                plan["used"].append(value)
+            if value and value not in used:
+                used.append(value)
 
     def show_feedback(self, chat, state, step):
         t = partial(ui_text, state.language)
@@ -325,9 +331,10 @@ class WeeklyFlow:
         material = result.get("material")
         rows = []
         if outcome != "success":
-            lines.append(self.adjustment(result, state.language))
+            lines.append(h(adjustment_for(step, result.get("note", ""))))
             rows.append([button("Доработать действие", f"plan:retry:{suffix}")])
-        elif self.current_step(plan):
+        elif following := self.current_step(plan):
+            lines.append(f"<b>{t('Ближайшее действие')}</b>\n{h(self.step_text(following, 'instruction', state.language))}")
             rows.append([button("Следующее действие", f"plan:next:{suffix}")])
         else:
             lines.append(t("Все действия плана пройдены."))
@@ -346,16 +353,6 @@ class WeeklyFlow:
             lines.append(t("Подходящего нового материала пока нет."))
         rows.append([button("К плану", "plan:open")])
         self.send(chat, "\n\n".join(lines), rows)
-
-    @staticmethod
-    def adjustment(result, language):
-        t = partial(ui_text, language)
-        note = result.get("note", "").casefold()
-        if re.search(r"данн|статистик|доступ|data|access", note):
-            return t("Сначала зафиксируйте, каких данных не хватает. Используйте один доступный показатель или соберите недостающее значение.")
-        if re.search(r"врем[ея]|не успева|time", note):
-            return t("Возьмите один пример из действия и проверьте его за один короткий подход.")
-        return t("Сузьте действие до одного примера. Сверьте его с критерием выполнения и запишите, чего ещё не хватает.")
 
     def message(self, chat, state, message):
         pending = state.pending
@@ -436,7 +433,7 @@ class WeeklyFlow:
             self.save(chat, state)
             return self.show(chat, state, plan, "Действие отложено. Вернитесь к нему, когда будет удобно.")
         if command == "retry" and linked["status"] in {"partial", "failed"} and not self.valid_note(state):
-            return self.begin(chat, state, linked, self.adjustment(linked["results"][-1], state.language))
+            return self.begin(chat, state, linked, adjustment_for(linked, linked["results"][-1].get("note", "")))
         return self.show(chat, state, plan)
 
     def offer_callback(self, chat, state, offer, command, token):

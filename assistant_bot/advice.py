@@ -1,6 +1,9 @@
 import re
 from dataclasses import dataclass
 
+from .answer_policy import (ad_finance_intent, break_even_advice, general_staff_kpi,
+                            missing_leads, shop_example_mismatch, unsupported_claim)
+
 
 STAGES = {
     "launch": "готовится к запуску",
@@ -128,6 +131,7 @@ class Advice:
     completion: str = ""
     answer: str = ""
     sources: tuple = ()
+    local_complete: bool = False
 
 
 def compose_advice(query: str, evidence, profile: dict, obstacle: str = "") -> Advice:
@@ -139,12 +143,49 @@ def compose_advice(query: str, evidence, profile: dict, obstacle: str = "") -> A
     context = " · ".join(value for value in (sector, stage_context) if value)
     regulated = bool(_REGULATED.search(query))
     completion = ""
+    sourced = ((evidence.title, evidence.url),)
+
+    if calculation := break_even_advice(query, evidence):
+        answer, action, completion = calculation
+        return Advice(passage, evidence.title, evidence.url, action, context, regulated,
+                      completion, answer, sourced, local_complete=True)
+    if getattr(evidence, "content_scope", "public_text") in {"description", "document_description"}:
+        answer = ("В каталоге доступно описание материала. По нему можно понять назначение, "
+                  "а содержание файла, видео или инструмента нужно проверить на странице материала.")
+        action = "Откройте карточку материала и проверьте, даёт ли она доступ к нужному формату."
+        completion = "Отмечено, есть ли в карточке нужный файл, видео или инструмент."
+        return Advice(passage, evidence.title, evidence.url, action, context, regulated,
+                      completion, answer, sourced)
+    if not regulated and ad_finance_intent(query) and missing_leads(f"{query}\n{obstacle}"):
+        answer = ("Без числа заявок нельзя проверить стоимость заявки. Для оценки окупаемости "
+                  "проверьте отдельно, сохранились ли расходы на рекламу и данные о продажах, "
+                  "выручке или прибыли, которые можно связать с кампанией за тот же период.")
+        action = "Заполните для одной кампании строки: период, расходы и связанные с ней финансовые данные. Отметьте пропуски."
+        completion = "Для каждой строки записано значение с источником данных или указано, что данных нет."
+        return Advice(passage, evidence.title, evidence.url, action, context, regulated,
+                      completion, answer, sourced)
+    if general_staff_kpi(query):
+        answer = ("Выберите показатели отдельно для каждой роли. Проверьте, влияет ли сотрудник "
+                  "на показатель и можно ли его измерить одинаково для людей с той же ролью. "
+                  "Числовые пороги премирования отдела продаж нельзя автоматически переносить на другие роли.")
+        action = "Выберите одну роль в команде и запишите её задачу, показатель и способ его измерения."
+        completion = "Для одной роли записаны задача, один показатель и источник данных для него."
+        return Advice(passage, evidence.title, evidence.url, action, context, regulated,
+                      completion, answer, sourced)
+    if shop_example_mismatch(query, evidence.title):
+        answer = ("Источник описывает магазин одежды. Это пример для конкретного ассортимента. "
+                  "Уточните, что продаёт ваш магазин, чтобы проверить применимость совета.")
+        action = "Укажите основную категорию товаров и задачу, которую хотите решить."
+        completion = "Названы категория товаров и одна задача магазина."
+        return Advice(passage, evidence.title, evidence.url, action, context, regulated,
+                      completion, answer, sourced)
 
     tokens = _words(query)
     candidates = [
         sentence for sentence in _sentences(evidence.passage)
         if _ACTION.match(sentence) and not sentence.endswith("?")
         and tokens & _words(sentence) and 35 <= len(sentence) <= 180
+        and not unsupported_claim(query, obstacle, sentence)
     ]
     practical = max(candidates, key=lambda sentence: len(tokens & _words(sentence)), default="")
     if regulated:

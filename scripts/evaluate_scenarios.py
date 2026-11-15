@@ -212,9 +212,14 @@ def run_flow(case, directory, catalog):
     database = directory / f"{case['id']}.db"
     if flow in {"clarifications", "new_topic", "cancel"}:
         queries = []
-        generator = SimpleNamespace(last_status="insufficient", last_metrics={},
-                                    last_clarification="В каком канале размещается реклама?",
-                                    generate=lambda *args, **kwargs: None)
+        generator = SimpleNamespace(last_status="insufficient", last_metrics={}, last_clarification="")
+
+        def clarify(question, *args, **kwargs):
+            generator.last_clarification = ("Какой результат нужно измерить?" if "ВКонтакте" in question
+                                            else "В каком канале размещается реклама?")
+            return None
+
+        generator.generate = clarify
         check_context(Conversation(database, fixture_catalog(search_queries=queries), generator), case, queries)
     elif flow in {"api_failure", "budget", "metadata"}:
         generator = unavailable_generator(1 if flow == "budget" else 2)

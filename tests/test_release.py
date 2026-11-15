@@ -44,6 +44,7 @@ class ReleaseRegressionTests(unittest.TestCase):
         self.bot.message(1, question)
         self.assertEqual(self.store.get(1).pending['kind'], 'clarify')
         self.bot.conversations = ConversationStore(self.path)
+        self.generator.last_clarification = 'Что хотите измерить?'
         self.bot.message(1, 'ВКонтакте')
         self.assertIn(question, self.search.call_args.args[0])
         self.assertIn('ВКонтакте', self.search.call_args.args[0])
@@ -52,6 +53,21 @@ class ReleaseRegressionTests(unittest.TestCase):
         self.assertIn('заказы', self.search.call_args.args[0])
         self.bot.message(2, 'Что такое NPS?')
         self.assertNotIn('ВКонтакте', self.search.call_args.args[0])
+
+    def test_repeated_clarification_ends_with_sources(self):
+        self.bot.message(1, 'Как оценить эффективность рекламы?')
+        self.generator.last_clarification = 'В каком КАНАЛЕ размещается реклама !'
+        self.bot.message(1, 'ВКонтакте')
+        self.assertFalse(self.store.get(1).pending)
+        _, message, rows = self.api.messages[-1]
+        self.assertNotIn('КАНАЛЕ', message)
+        self.assertIn(self.source.url, [item.get('url') for row in rows for item in row])
+
+    def test_general_tax_question_asks_for_tax_regime_without_model(self):
+        self.search.return_value = SearchResult(needs_clarification=True)
+        self.bot.message(1, 'Как платить налоги?')
+        self.generator.generate.assert_not_called()
+        self.assertIn('налоговый режим', self.api.messages[-1][1])
 
     def test_explicit_new_question_and_cancel_leave_old_clarification(self):
         self.bot.message(1, 'Как оценить эффективность рекламы?')

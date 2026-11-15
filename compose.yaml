@@ -45,6 +45,7 @@ services:
       DEMO_MODE: "${DEMO_MODE:-false}"
       OLLAMA_URL: "${OLLAMA_URL:-}"
       OLLAMA_MODEL: "${OLLAMA_MODEL:-}"
+      LLM_MODE: "${LLM_MODE:-closed}"
       LLM_PROVIDER: "${LLM_PROVIDER:-none}"
       LLM_MODEL: "${LLM_MODEL:-}"
       XAI_API_KEY: "${XAI_API_KEY:-}"
@@ -56,6 +57,10 @@ services:
       LLM_MAX_REQUESTS: "${LLM_MAX_REQUESTS:-30}"
       LLM_STREAM: "${LLM_STREAM:-true}"
       LLM_BUDGET_PATH: "${LLM_BUDGET_PATH:-/app/runtime/llm-budget.db}"
+      LLM_PUBLIC_GLOBAL_LIMIT: "${LLM_PUBLIC_GLOBAL_LIMIT:-30}"
+      LLM_PUBLIC_USER_LIMIT: "${LLM_PUBLIC_USER_LIMIT:-5}"
+      LLM_PUBLIC_MIN_INTERVAL_SECONDS: "${LLM_PUBLIC_MIN_INTERVAL_SECONDS:-30}"
+      LLM_PUBLIC_MAX_CONCURRENT: "${LLM_PUBLIC_MAX_CONCURRENT:-2}"
     volumes:
       - catalog:/app/catalog:ro
       - runtime:/app/runtime

@@ -8,10 +8,11 @@ import unittest
 from unittest.mock import Mock
 
 from assistant_bot.bot import Assistant
-from assistant_bot.knowledge import Evidence, Material, SearchResult
+from assistant_bot.knowledge import Catalog, Evidence, Material, SearchResult
 from assistant_bot.llm import ResponseGenerator
 from assistant_bot.reminders import ReminderStore
 from assistant_bot.state import ConversationStore
+from assistant_bot.weekly_plan import build_plan, next_material
 
 
 QUESTION = "Кофейня уже работает. Как оценить эффективность рекламы?"
@@ -568,6 +569,128 @@ class WeeklyPlanTests(unittest.TestCase):
         self.assertEqual(self.store.get(1).profile, older["profile"])
         self.assertEqual(self.store.get(1).language, "ru")
         self.assertNotIn("Начать действие", self.buttons())
+
+    def test_existing_plan_without_new_keys_retains_results(self):
+        self.bootstrap()
+        self.offer()
+        self.click("Начать план")
+        self.start_action()
+        self.report_result("Получилось частично", "Нет данных о расходах.")
+        state = self.store.get(1)
+        old_plan = state.weekly_plan
+        old_plan.pop("used")
+        for step in old_plan["steps"]:
+            for key in ("kind", "subject", "artifact", "requires", "search_terms", "reduced"):
+                step.pop(key, None)
+            step["source"].pop("heading", None)
+            step["source"].pop("excerpt", None)
+        self.store.save(1, state)
+        self.restart()
+        self.message("/step")
+        self.click("Доработать действие")
+        self.report_result("Получилось", "Есть исходный период и число заявок.")
+        first = self.plan()["steps"][0]
+        self.assertEqual([result["outcome"] for result in first["results"]], ["partial", "success"])
+        self.assertIn("Следующее действие", self.buttons())
+
+
+class WeeklyPlanningContentTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.demo = Catalog(Path(__file__).resolve().parents[1] / "assistant_bot" / "demo_catalog.jsonl")
+
+    def fixture(self, title, passage, *, scope="public_text"):
+        evidence = Evidence(title, "https://kurs.alfabank.ru/articles/plan-example/",
+                            passage, content_scope=scope)
+        return Mock(is_demo=False, search=Mock(return_value=SearchResult((evidence,))), public_fragments=None)
+
+    def test_demo_ad_plan_has_distinct_artifacts_and_ordered_prerequisites(self):
+        plan = build_plan(self.demo, "Как оценить эффективность рекламы кофейни?", {}, minutes=30)
+        self.assertGreaterEqual(len(plan["steps"]), 3)
+        artifacts = set()
+        for step in plan["steps"]:
+            self.assertTrue(set(step["requires"]) <= artifacts)
+            self.assertNotIn(step["artifact"], artifacts)
+            self.assertTrue(step["source"]["excerpt"])
+            self.assertTrue(step["source"]["heading"])
+            artifacts.add(step["artifact"])
+        self.assertIn("cost_per_order_value", artifacts)
+        self.assertNotIn("Проверьте результат", [step["title"] for step in plan["steps"]])
+
+    def test_demo_ad_plan_without_past_statistics_sets_up_future_measurement(self):
+        plan = build_plan(self.demo, "Как оценить эффективность рекламы кофейни? Нет прошлой статистики.", {},
+                          minutes=30)
+        self.assertTrue(plan["steps"])
+        self.assertFalse({"calculate", "compare"} & {s["kind"] for s in plan["steps"]})
+        self.assertTrue(any("форма будущего учёта" in s["completion"] for s in plan["steps"]))
+
+    def test_advertising_does_not_replace_requested_leads_with_order_cost(self):
+        plan = build_plan(self.demo, "Как оценить эффективность рекламы кофейни? Хочу считать заявки.", {},
+                          minutes=30)
+        self.assertTrue(plan["steps"])
+        self.assertNotIn("cost_per_order", {s["subject"] for s in plan["steps"]})
+        self.assertIn("число заявок", plan["steps"][0]["instruction"])
+
+    def test_romi_keeps_distinct_inputs_when_leads_were_not_tracked(self):
+        catalog = self.fixture(
+            "Как оценить окупаемость рекламы",
+            "Рассчитайте маржинальную прибыль от заказов. Для этого из выручки вычтите себестоимость товара. "
+            "ROMI = (маржинальная прибыль − расходы на рекламу) / расходы на рекламу × 100%.")
+        plan = build_plan(catalog, "Как оценить окупаемость рекламы? Не записывали заявки.", {}, minutes=30)
+        self.assertEqual([s["artifact"] for s in plan["steps"]],
+                         ["attributed_finances", "campaign_margin_value", "romi_value"])
+        self.assertIn("связанные продажи", plan["steps"][0]["instruction"])
+        self.assertIn("Если известны", plan["steps"][-1]["instruction"])
+        self.assertNotIn("заявок", " ".join(s["completion"] for s in plan["steps"]))
+
+    def test_break_even_keeps_units_and_does_not_calculate_from_a_draft(self):
+        catalog = self.fixture(
+            "Маржинальность и точка безубыточности",
+            "Постоянные затраты не зависят от выручки. Маржа = выручка − переменные затраты. "
+            "Точка безубыточности = постоянные затраты / маржинальность.")
+        full = build_plan(catalog, "Как рассчитать точку безубыточности?", {}, minutes=45)
+        short = build_plan(catalog, "Как рассчитать точку безубыточности за 20 минут в день?", {}, minutes=45)
+        self.assertEqual([s["kind"] for s in full["steps"]], ["collect", "calculate", "calculate"])
+        self.assertIn("0,4 для 40%", full["steps"][-1]["instruction"])
+        self.assertEqual(len(short["steps"]), 1)
+        self.assertTrue(short["steps"][0]["reduced"])
+        self.assertTrue(short["incomplete"])
+
+    def test_opening_plan_with_20_minutes_limits_scope(self):
+        catalog = self.fixture(
+            "Как составить бизнес-план",
+            "Опишите продукт или услугу. Исследуйте рынок. Составьте финансовый план.")
+        plan = build_plan(catalog, "Как составить бизнес-план за 20 минут в день?", {}, minutes=60)
+        self.assertEqual({s["artifact"] for s in plan["steps"]},
+                         {"offer_draft", "competitor_snapshot", "startup_inputs_outline"})
+        self.assertTrue(all(s["minutes"] <= 20 for s in plan["steps"]))
+        self.assertTrue(plan["incomplete"])
+        self.assertIn("финансовый прогноз потребуют отдельных проверок", plan["limitation"])
+
+    def test_ambiguous_or_limited_demand_gets_only_sourced_work(self):
+        plan = build_plan(self.demo, "Как проверить спрос до открытия кофейни?", {"stage": "launch"}, minutes=20)
+        self.assertEqual([s["artifact"] for s in plan["steps"]], ["foot_traffic_observations"])
+        self.assertTrue(plan["incomplete"])
+        unsupported = self.fixture("Исследования спроса", "Проведите интервью с покупателями.",
+                                   scope="document_description")
+        plan = build_plan(unsupported, "Как проверить спрос на товар?", {}, minutes=60)
+        self.assertFalse(plan["steps"])
+
+    def test_employee_sales_kpis_do_not_become_a_general_retention_plan(self):
+        source = self.fixture("Показатели эффективности менеджеров по продажам",
+                              "Регулярный сбор обратной связи. Обсудите с сотрудником его цели.")
+        self.assertFalse(build_plan(source, "Как удержать сотрудников магазина?", {}, minutes=60)["steps"])
+
+    def test_followup_matches_action_and_does_not_repeat_material(self):
+        action = {"title": "Уточните учёт", "source": {"url": SOURCE.url}, "search_terms": r"расход|заяв"}
+        catalog = Catalogue()
+        selected = next_material(catalog, QUESTION, {}, step=action)
+        self.assertEqual(selected["url"], FOLLOW_UP.url)
+        self.assertIn(action["title"], selected["reason"])
+        self.assertIsNone(next_material(catalog, QUESTION, {}, step=action, used=[FOLLOW_UP.url]))
+        irrelevant = {"title": "Проверьте границы кампании", "source": {"url": SOURCE.url},
+                      "search_terms": r"сопоставим\w+ период"}
+        self.assertIsNone(next_material(catalog, QUESTION, {}, step=irrelevant))
 
 
 if __name__ == "__main__":

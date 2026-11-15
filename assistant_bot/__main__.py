@@ -4,15 +4,17 @@ import logging
 import os
 import re
 import signal
+import sqlite3
 import sys
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from time import monotonic
 
 from .bot import Assistant
 from .dispatch import ChatDispatcher, private_chat_id
 from .knowledge import Catalog
-from .llm import generator_from_env
+from .llm import configured_llm_mode, generator_from_env
 from .reminders import ReminderStore
 from .rerank import LocalReranker
 from .state import ConversationStore
@@ -50,7 +52,7 @@ def run(api, assistant):
         for signum in (signal.SIGTERM, signal.SIGINT):
             previous_signals[signum] = signal.signal(signum, lambda *_: stop.set())
     dispatcher = ChatDispatcher(assistant.update)
-    busy_at = {}
+    busy_at = OrderedDict()
 
     def worker():
         while not stop.is_set():
@@ -88,6 +90,9 @@ def run(api, assistant):
                         chat = private_chat_id(update)
                         if chat is not None and monotonic() - busy_at.get(chat, float("-inf")) >= 30:
                             busy_at[chat] = monotonic()
+                            busy_at.move_to_end(chat)
+                            if len(busy_at) > 1024:
+                                busy_at.popitem(last=False)
                             assistant.send(chat, "Сейчас много запросов. Дождитесь ответа на предыдущие сообщения и попробуйте ещё раз.")
                 except Exception as error:
                     LOG.error("Обновление %s: %s", update["update_id"], type(error).__name__)
@@ -117,7 +122,10 @@ def main():
     model_url = os.getenv("OLLAMA_URL", "").strip()
 
     try:
+        llm_mode = configured_llm_mode(os.environ)
         if args.llm_check:
+            if llm_mode == "public":
+                raise ValueError("--llm-check используйте в закрытом режиме на учебных данных.")
             generator = generator_from_env(os.environ)
             if not generator:
                 raise ValueError("Для --llm-check задайте LLM_PROVIDER и ключ выбранного сервиса.")
@@ -130,7 +138,8 @@ def main():
             print(f"LLM готова: {generator.provider} / {generator.model}. Структура и цитата проверены.")
             return 0
         catalog = Catalog(catalog_path)
-        chooser = LocalReranker(model_url, os.getenv("OLLAMA_MODEL", "").strip()) if model_url else None
+        chooser = (LocalReranker(model_url, os.getenv("OLLAMA_MODEL", "").strip())
+                   if model_url and llm_mode == "closed" else None)
         if args.check:
             make_assistant(Console(), catalog, state_path)
             print(f"Каталог и SQLite готовы. Материалы: {catalog.material_count}; с текстом: {catalog.text_material_count}.")
@@ -156,6 +165,9 @@ def main():
             return 2
         api = Telegram(token)
         run(api, make_assistant(api, catalog, state_path, chooser, generator))
+    except sqlite3.Error:
+        LOG.error("Не удалось открыть SQLite состояния или бюджета.")
+        return 2
     except (OSError, ValueError, TelegramError) as error:
         LOG.error("%s", error)
         return 2

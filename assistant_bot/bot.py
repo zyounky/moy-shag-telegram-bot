@@ -1,11 +1,14 @@
 import logging
 import re
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .advice import SECTORS, STAGES, catalog_context, compose_advice, infer_profile
+from .answer_policy import tax_regime_needed
+from .budget import PublicAccess
 from .progress import DraftReply
 from .privacy import PrivacyRejected, has_personal_disclosure, prepare_plan_note
 from .query_language import russian_search_query
@@ -42,6 +45,17 @@ MENU = [
      {"text": "Язык", "callback_data": "lang:show"}],
 ]
 CONTROLS = [[{"text": "Назад в меню", "callback_data": "menu:home"}]]
+PUBLIC_FALLBACK = {
+    "public_global": "Общий лимит консультаций исчерпан. Ниже материалы и шаг из локального каталога.",
+    "public_user": "Ваш лимит консультаций исчерпан. Ниже материалы и шаг из локального каталога.",
+    "public_rate": "Недавно была консультация. Пока можно воспользоваться материалами и шагом из локального каталога.",
+    "public_busy": "Все места для консультаций заняты. Ниже материалы и шаг из локального каталога.",
+    "consent": "Сейчас доступен ответ из локального каталога.",
+    "unavailable": "Внешняя консультация сейчас недоступна. Ниже материалы и шаг из локального каталога.",
+}
+PUBLIC_NOTICE = ("Для консультации {provider} получает ваш вопрос и относящиеся к нему уточнения, "
+                 "этап, сферу и цель бизнеса, описание препятствия и доступные фрагменты «Альфа-Курса». "
+                 "Модель использует их, чтобы ответить по источникам. Согласие можно отозвать через /privacy.")
 
 
 def continued_question(question, reply):
@@ -73,6 +87,8 @@ class Assistant:
         self.reminders = reminders
         self.chooser = chooser
         self.generator = generator
+        public_access = getattr(generator, "public_access", None)
+        self.public_access = public_access if isinstance(public_access, PublicAccess) else None
         self.now = now or (lambda: datetime.now(UTC))
         self.week = WeeklyFlow(self)
 
@@ -99,13 +115,53 @@ class Assistant:
             detail = screen["current_step"].format(step=h(current["title"]))
         if state.language == "en":
             detail += "\n\n" + t("Поддерживаются типовые вопросы на английском. Материалы курса и локальные советы могут быть на русском.")
-        self.send(chat, f"{screen['welcome']}\n\n{detail}" + _demo_notice(self.catalog, t), MENU)
+        rows = MENU + [[button("Внешняя модель", "consent:show")]] if self.public_access else MENU
+        self.send(chat, f"{screen['welcome']}\n\n{detail}" + _demo_notice(self.catalog, t), rows)
 
     def show_screen(self, chat, state, screen):
         rows = CONTROLS
         if screen == "help":
             rows = [[button("Что я умею", "menu:about"), button("Язык", "lang:show")]] + rows
+            if self.public_access:
+                rows = [[button("Внешняя модель", "consent:show")]] + rows
         self.send(chat, SCREENS.get(state.language, SCREENS["ru"])[screen], rows)
+
+    def consent_notice(self, chat, t, decision):
+        try:
+            nonce = self.public_access.issue_notice(chat)
+        except sqlite3.Error:
+            return t("Настройки согласия временно недоступны."), []
+        if decision == "granted":
+            rows = [[button("Отозвать согласие", f"consent:declined:{nonce}")]]
+        else:
+            rows = [[button("Дать согласие", f"consent:granted:{nonce}"),
+                     button("Продолжить без модели", f"consent:declined:{nonce}")]]
+        name = {"xai": "xAI", "openrouter": "OpenRouter"}[self.public_access.provider]
+        return t(PUBLIC_NOTICE, provider=name), rows
+
+    def show_privacy(self, chat, state):
+        if not self.public_access:
+            return self.send(chat, "Настройка согласия доступна в публичном режиме.", CONTROLS)
+        try:
+            decision = self.public_access.decision(chat)
+        except sqlite3.Error:
+            return self.send(chat, "Настройки согласия временно недоступны.", CONTROLS)
+        message, rows = self.consent_notice(chat, partial(ui_text, state.language), decision)
+        self.send(chat, message, rows + CONTROLS, language=state.language)
+
+    def consent_callback(self, chat, state, data):
+        if not self.public_access or data == "show":
+            return self.show_privacy(chat, state)
+        decision, _, nonce = data.partition(":")
+        try:
+            accepted = self.public_access.choose(chat, nonce, decision)
+        except sqlite3.Error:
+            return self.send(chat, "Настройки согласия временно недоступны.", CONTROLS)
+        if not accepted:
+            return self.send(chat, "Кнопка устарела. Откройте настройки через /privacy.", CONTROLS)
+        message = ("Согласие сохранено. Следующий подходящий вопрос можно отправить модели."
+                   if decision == "granted" else "Внешняя модель отключена для этого чата. Поиск, план и напоминания доступны.")
+        self.send(chat, message, CONTROLS)
 
     def update(self, update: dict):
         callback = update.get("callback_query")
@@ -122,7 +178,7 @@ class Assistant:
         if chat.get("type") == "private" and message.get("text"):
             self.message(chat["id"], message["text"].strip(), require_language=True)
 
-    def message(self, chat: int, text: str, *, require_language=False):
+    def message(self, chat: int, text: str, *, require_language=False, allow_public_call=True):
         state = self.conversations.get(chat)
         verb = text.split(maxsplit=1)[0].split("@", 1)[0].lower() if text else ""
         if not verb.startswith("/") and has_personal_disclosure(text):
@@ -145,6 +201,8 @@ class Assistant:
             self.show_screen(chat, state, verb[1:])
         elif verb == "/language":
             self.show_language(chat)
+        elif verb == "/privacy":
+            self.show_privacy(chat, state)
         elif verb == "/cancel":
             if self.week.valid_note(state):
                 return self.week.save_note(chat, state, self.week.linked_step(state), "")
@@ -172,25 +230,27 @@ class Assistant:
         elif state.pending.get("kind") in {"weekly_capacity", "weekly_details", "weekly_note"}:
             if is_new_question(text):
                 state.pending.clear()
-                return self.answer(chat, state, text[:600])
+                return self.answer(chat, state, text[:600], allow_public_call=allow_public_call)
             self.week.message(chat, state, text)
         elif state.pending.get("kind") in ("clarify", "obstacle"):
             is_obstacle = state.pending["kind"] == "obstacle"
             obstacle = text if is_obstacle else state.pending.get("obstacle", "")
             query = state.pending["query"]
+            asked = state.pending.get("asked", ())
             state.pending.clear()
             infer_profile(russian_search_query(text), state.profile)
             if not is_obstacle and is_new_question(text):
-                return self.answer(chat, state, text[:600])
+                return self.answer(chat, state, text[:600], allow_public_call=allow_public_call)
             question = query if is_obstacle else continued_question(query, text)
-            self.answer(chat, state, question, clarified=True, obstacle=obstacle)
+            self.answer(chat, state, question, clarified=True, obstacle=obstacle,
+                        allow_public_call=allow_public_call, asked=asked)
         else:
             followup = bool(re.match(
                 r"^(?:а\s+(?:если|как|что|почему)|как\s+это|что\s+это|объясни\s+подробнее|"
                 r"подробнее\b|не\s+получилось|у\s+меня\s+нет|нет\s+данных|"
                 r"what if\b|how about\b|tell me more\b|i (?:don't|don’t|do not) have\b)", text, re.I))
             question = continued_question(state.topic, text) if state.topic and followup else text[:600]
-            self.answer(chat, state, question)
+            self.answer(chat, state, question, allow_public_call=allow_public_call)
 
     def show_profile(self, chat, state):
         t = partial(ui_text, state.language)
@@ -207,10 +267,17 @@ class Assistant:
     def _clarify(self, chat, state, question):
         state.pending = {"kind": "clarify", "query": question}
         self.conversations.save(chat, state)
-        self.send(chat, "Какой результат нужен сейчас? Например, проверить спрос, "
-                        "привлечь клиентов или разобраться в учёте.", CONTROLS)
+        if tax_regime_needed(russian_search_query(question)):
+            prompt = ("Which tax regime do you use? If you're unsure, tell me how your business is registered."
+                      if state.language == "en" else
+                      "Какой налоговый режим вы применяете? Если не знаете, укажите форму регистрации бизнеса.")
+        else:
+            prompt = ("Какой результат нужен сейчас? Например, проверить спрос, "
+                      "привлечь клиентов или разобраться в учёте.")
+        self.send(chat, prompt, CONTROLS)
 
-    def answer(self, chat, state, question: str, clarified: bool = False, obstacle: str = ""):
+    def answer(self, chat, state, question: str, clarified: bool = False, obstacle: str = "",
+               *, allow_public_call=True, asked=()):
         if not question:
             return self._clarify(chat, state, "")
         t = partial(ui_text, state.language)
@@ -242,7 +309,20 @@ class Assistant:
         if self.chooser:
             evidence = self.chooser.choose(search_query, context, result.evidence)
         advice = compose_advice(search_query, evidence, state.profile, search_obstacle)
-        use_generator = self.generator is not None and not result.exact_definition
+        use_generator = (self.generator is not None and not result.exact_definition
+                         and not getattr(advice, "local_complete", False))
+        public_notice = False
+        public_fallback = ""
+        if use_generator and self.public_access:
+            use_generator = self.catalog.is_demo or self.generator.allow_case_data
+            if use_generator:
+                try:
+                    decision = self.public_access.decision(chat)
+                except sqlite3.Error:
+                    decision = "unavailable"
+                    public_fallback = t(PUBLIC_FALLBACK["unavailable"])
+                use_generator = allow_public_call and decision == "granted"
+                public_notice = not decision
         live_preview = use_generator and callable(getattr(self.api, "edit", None))
         reply = DraftReply(self.api, chat, t("Ответ формируется…")) if live_preview else None
 
@@ -264,12 +344,18 @@ class Assistant:
                      self.generator.last_metrics.get("cache_hit"))
             if generated:
                 evidence, advice = generated
+            elif self.public_access and self.generator.last_status in PUBLIC_FALLBACK:
+                public_fallback = t(PUBLIC_FALLBACK[self.generator.last_status])
             else:
                 status = self.generator.last_status
                 if status == "insufficient":
-                    state.pending = {"kind": "clarify", "query": question, "obstacle": obstacle}
-                    text = (t("В найденных материалах недостаточно сведений для уверенного ответа.") + " "
-                            + (h(self.generator.last_clarification) or t("Уточните, какой результат хотите получить.")))
+                    text = t("В найденных материалах недостаточно сведений для уверенного ответа.")
+                    prompt = self.generator.last_clarification or t("Уточните, какой результат хотите получить.")
+                    signature = " ".join(re.findall(r"\w+", prompt.casefold().replace("ё", "е")))
+                    if signature and signature not in asked and len(asked) < 2:
+                        state.pending = {"kind": "clarify", "query": question, "obstacle": obstacle,
+                                         "asked": [*asked, signature]}
+                        text += " " + h(prompt)
                 elif status in {"disabled", "expired", "budget"}:
                     text = t("Сейчас доступна подборка материалов; консультация модели для этого чата не активна.")
                 elif status == "privacy":
@@ -320,7 +406,7 @@ class Assistant:
         state.plan_seed = {}
         self.conversations.save(chat, state)
 
-        sections = []
+        sections = [public_fallback] if public_fallback else []
         if advice.context:
             display_context = " · ".join(t(value) for value in advice.context.split(" · "))
             sections.append(f"<i>{t('Учёл контекст')}: {h(display_context)}.</i>")
@@ -350,6 +436,10 @@ class Assistant:
         hint = ("Откройте «Моя задача» → «Последний совет», чтобы вернуться к этому совету."
                 if state.action else "К этому совету можно вернуться через «Моя задача».")
         sections.append(f"<i>{t(hint)}</i>")
+        if public_notice:
+            notice, consent_rows = self.consent_notice(chat, t, "")
+            sections.append(notice)
+            rows.extend(consent_rows)
         rows.extend(CONTROLS)
         finish("\n\n".join(sections), rows)
 
@@ -667,6 +757,8 @@ class Assistant:
 
     def callback(self, chat, data):
         state = self.conversations.get(chat)
+        if data.startswith("consent:"):
+            return self.consent_callback(chat, state, data.removeprefix("consent:"))
         if data == "lang:show":
             return self.show_language(chat)
         if data in ("lang:ru", "lang:en"):
@@ -677,7 +769,7 @@ class Assistant:
                 state.pending.clear()
             self.conversations.save(chat, state)
             if question:
-                return self.message(chat, question)
+                return self.message(chat, question, allow_public_call=False)
             return self.show_home(chat, state)
         if data == "menu:home":
             return self.show_home(chat, state)
@@ -712,7 +804,8 @@ class Assistant:
                 state.profile["stage"] = stage
             if state.pending.get("kind") == "clarify":
                 question = state.pending.get("query", "")
-                return self.answer(chat, state, question, clarified=True)
+                return self.answer(chat, state, question, clarified=True, allow_public_call=False,
+                                   asked=state.pending.get("asked", ()))
             self.conversations.save(chat, state)
             return self.send(chat, "Этап бизнеса сохранён. Напишите, с чем помочь.", CONTROLS)
         if data == "profile:reset":

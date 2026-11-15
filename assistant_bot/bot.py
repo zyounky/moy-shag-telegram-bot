@@ -22,23 +22,23 @@ TIME_ZONES = {
     "Asia/Vladivostok": "Владивосток",
 }
 STAGE_BUTTONS = [
-    {"text": "Готовлюсь к запуску", "callback_data": "stage:launch"},
+    {"text": "Планирую открыть", "callback_data": "stage:launch"},
     {"text": "Уже работаю", "callback_data": "stage:operate"},
-    {"text": "Развиваю бизнес", "callback_data": "stage:grow"},
+    {"text": "Расширяюсь", "callback_data": "stage:grow"},
     {"text": "Пропустить", "callback_data": "stage:skip"},
 ]
 LANGUAGE_BUTTONS = [[{"text": "Русский", "callback_data": "lang:ru"},
                      {"text": "English", "callback_data": "lang:en"}]]
 MENU = [
     [{"text": "Задать вопрос", "callback_data": "menu:ask"}],
-    [{"text": "Мой шаг", "callback_data": "action:show"},
+    [{"text": "Моя задача", "callback_data": "action:show"},
      {"text": "Напоминания", "callback_data": "reminders"}],
     [{"text": "Помощь", "callback_data": "menu:help"},
-     {"text": "Что умеет бот", "callback_data": "menu:about"}],
-    [{"text": "Контекст бизнеса", "callback_data": "profile:show"},
+     {"text": "Что я умею", "callback_data": "menu:about"}],
+    [{"text": "Мой бизнес", "callback_data": "profile:show"},
      {"text": "Язык", "callback_data": "lang:show"}],
 ]
-CONTROLS = [[{"text": "В меню", "callback_data": "menu:home"}]]
+CONTROLS = [[{"text": "Назад в меню", "callback_data": "menu:home"}]]
 
 
 def button(label: str, callback: str) -> dict:
@@ -112,7 +112,7 @@ class Assistant:
     def show_screen(self, chat, state, screen):
         rows = CONTROLS
         if screen == "help":
-            rows = [[button("Что умеет бот", "menu:about"), button("Язык", "lang:show")]] + rows
+            rows = [[button("Что я умею", "menu:about"), button("Язык", "lang:show")]] + rows
         self.send(chat, SCREENS.get(state.language, SCREENS["ru"])[screen], rows)
 
     def update(self, update: dict):
@@ -196,9 +196,9 @@ class Assistant:
         context = catalog_context(state.profile)
         bits = [context["sector"], context["stage"], context["goal"]]
         profile = " · ".join(t(v) for v in bits if v) or t("Пока пусто")
-        self.send(chat, f"<b>{t('Контекст бизнеса')}</b>\n{h(profile)}\n\n"
-                        + t("Заполните профиль или опишите ситуацию в следующем вопросе."),
-                  [[b] for b in STAGE_BUTTONS[:3]] + [[button("Сбросить профиль", "profile:reset")]] + CONTROLS)
+        self.send(chat, f"<b>{t('Мой бизнес')}</b>\n{h(profile)}\n\n"
+                        + t("Выберите этап бизнеса. Сферу можно указать в следующем вопросе."),
+                  [[b] for b in STAGE_BUTTONS[:3]] + [[button("Очистить профиль", "profile:reset")]] + CONTROLS)
 
     def _clarify(self, chat, state, question):
         state.pending = {"kind": "clarify", "query": question}
@@ -207,7 +207,7 @@ class Assistant:
             self.send(chat, "Какой результат нужен сейчас? Например, проверить спрос, "
                             "привлечь клиентов или разобраться в учёте.", CONTROLS)
         else:
-            self.send(chat, "Укажите стадию бизнеса или уточните задачу сообщением.",
+            self.send(chat, "Выберите этап бизнеса или расскажите подробнее.",
                       [[b] for b in STAGE_BUTTONS] + CONTROLS)
 
     def answer(self, chat, state, question: str, clarified: bool = False, obstacle: str = ""):
@@ -325,7 +325,7 @@ class Assistant:
         for title, url in advice.sources:
             if url and url != advice.url and all(row[0].get("url") != url for row in rows):
                 rows.append([link(t("Источник") + ": " + title[:35], url)])
-        rows.append([button("Взять шаг в работу", f"action:take:{action['id']}")])
+        rows.append([button("Начать задачу", f"action:take:{action['id']}")])
         self.add_recommendations(result, sections, rows, t, advice.url, advice.title)
         rows.extend(CONTROLS)
         finish("\n\n".join(sections), rows)
@@ -365,14 +365,14 @@ class Assistant:
                   "blocked": "Нужна помощь"}.get(action["status"], "")
         rows = [[link("Открыть источник", action["source"])]] if action["source"] else []
         if action["status"] == "suggested":
-            rows.append([button("Взять шаг в работу", f"action:take:{action_id}")])
+            rows.append([button("Начать задачу", f"action:take:{action_id}")])
         if action["status"] in ("active", "blocked"):
             rows += [[button("Сделано", f"action:done:{action_id}"),
-                      button("Есть препятствие", f"action:blocked:{action_id}")],
-                     [button("Напомнить об этом шаге", f"action:remind:{action_id}")]]
+                      button("Не получается", f"action:blocked:{action_id}")],
+                     [button("Напомнить", f"action:remind:{action_id}")]]
         completion = action.get("completion")
         progress = f"\n\n<b>{t('Как проверить результат')}</b>\n{h(completion)}" if completion else ""
-        self.send(chat, f"<b>{t('Мой шаг')} · {h(t(status))}</b>\n{h(action['title'])}{progress}\n\n"
+        self.send(chat, f"<b>{t('Моя задача')} · {h(t(status))}</b>\n{h(action['title'])}{progress}\n\n"
                         f"{t('Источник')}: {h(action['source_title'])}", rows + CONTROLS)
 
     def action_callback(self, chat, state, payload: str):
@@ -384,8 +384,8 @@ class Assistant:
         if intent in ("take", "replace") and proposal.get("id") == action_id:
             if intent == "take" and action.get("status") in ("active", "blocked"):
                 return self.send(chat, "У вас уже есть шаг в работе. Заменить его новым?",
-                                 [[button("Заменить шаг", f"action:replace:{action_id}"),
-                                   button("Оставить текущий", "action:show")]])
+                                 [[button("Заменить задачу", f"action:replace:{action_id}"),
+                                   button("Оставить как есть", "action:show")]])
             self.disable_action_reminders(chat, action)
             proposal["status"] = "active"
             state.action, state.proposal = proposal, {}
@@ -424,7 +424,7 @@ class Assistant:
             return self.ask_when(chat, state)
         self.conversations.save(chat, state)
         self.send(chat, "О чём напомнить?",
-                  [[button("Обучение", "rem:type:study"), button("Бизнес-событие", "rem:type:business")],
+                  [[button("Учёба", "rem:type:study"), button("Работа", "rem:type:business")],
                    [button("Отмена", "rem:cancel")]])
 
     def ask_when(self, chat, state):
@@ -483,9 +483,10 @@ class Assistant:
         lines = [f"<b>{t('Мои напоминания')}</b>"]
         rows = []
         for item in entries[:10]:
-            lines.append(f"{h(item.title)}\n{h(_format_local(item.next_run, item.timezone, language))} · "
+            lines.append(f"{t('Напоминание №{id}', id=item.id)} · {h(item.title)}\n"
+                         f"{h(_format_local(item.next_run, item.timezone, language))} · "
                          f"{t(FREQUENCIES[item.frequency])}")
-            rows.append([button(t("Изменить №{id}", id=item.id), f"manage:edit:{item.id}"),
+            rows.append([button(t("Повтор №{id}", id=item.id), f"manage:edit:{item.id}"),
                          button(t("Отключить №{id}", id=item.id), f"manage:off:{item.id}")])
         self.send(chat, "\n\n".join(lines), rows + add)
 
@@ -531,7 +532,7 @@ class Assistant:
             date = _format_local(datetime.fromisoformat(pending["scheduled_for"]), pending["timezone"], state.language)
             return self.send(chat, f"<b>{t('Подтвердите напоминание')}</b>\n{h(pending['title'])}\n"
                                    f"{h(date)} · {t(FREQUENCIES[arg])}",
-                             [[button("Создать", "rem:confirm"), button("Отмена", "rem:cancel")],
+                             [[button("Сохранить", "rem:confirm"), button("Отмена", "rem:cancel")],
                               [button("Поменять время", "rem:when")]])
         if key == "confirm" and step == "confirm":
             try:
@@ -550,7 +551,7 @@ class Assistant:
             date = h(_format_local(entry.next_run, entry.timezone, state.language))
             return self.send(chat, t("Напоминание №{id} создано. Ближайшая отправка — {date}.",
                                      id=entry.id, date=date),
-                             [[button("Мои напоминания", "reminders")]] + CONTROLS)
+                             [[button("К напоминаниям", "reminders")]] + CONTROLS)
 
     def manage_reminder(self, chat, payload):
         language = self.conversations.get(chat).language
@@ -563,7 +564,7 @@ class Assistant:
         if intent == "off":
             disabled = self.reminders.disable(chat, reminder_id)
             return self.send(chat, "Напоминание отключено." if disabled else "Напоминание уже отключено.",
-                             [[button("Мои напоминания", "reminders")]])
+                             [[button("К напоминаниям", "reminders")]])
         if intent == "edit":
             item = self.reminders.get(chat, reminder_id)
             if not item or not item.active:
@@ -576,7 +577,7 @@ class Assistant:
                 date = h(_format_local(item.next_run, item.timezone, language))
                 return self.send(chat, t("Частота обновлена — {frequency}. Ближайшая отправка — {date}.",
                                          frequency=t(FREQUENCIES[frequency]), date=date),
-                                 [[button("Мои напоминания", "reminders")]] + CONTROLS)
+                                 [[button("К напоминаниям", "reminders")]] + CONTROLS)
             return self.send(chat, "Напоминание уже завершено или отключено.")
 
     def callback(self, chat, data):
@@ -614,7 +615,7 @@ class Assistant:
                 question = state.pending.get("query", "")
                 return self.answer(chat, state, question, clarified=True)
             self.conversations.save(chat, state)
-            return self.send(chat, "Контекст обновлён. Напишите, с чем помочь.", CONTROLS)
+            return self.send(chat, "Этап бизнеса сохранён. Напишите, с чем помочь.", CONTROLS)
         if data == "profile:reset":
             timezone = state.profile.get("timezone")
             state.profile.clear()
@@ -622,7 +623,7 @@ class Assistant:
                 state.profile["timezone"] = timezone
             state.pending.clear()
             self.conversations.save(chat, state)
-            return self.send(chat, "Контекст очищен.", CONTROLS)
+            return self.send(chat, "Профиль бизнеса очищен.", CONTROLS)
         if data.startswith("action:"):
             return self.action_callback(chat, state, data.removeprefix("action:"))
         if data.startswith("rem:"):
@@ -643,8 +644,8 @@ class Assistant:
                 rows.append([link(item.action_label or "Открыть материал", item.action_url)])
             if item.id in action.get("reminder_ids", []) and action.get("status") in ("active", "blocked"):
                 rows.append([button("Сделано", f"action:done:{action['id']}"),
-                             button("Есть препятствие", f"action:blocked:{action['id']}")])
-            rows.append([button("Мои напоминания", "reminders")])
+                             button("Не получается", f"action:blocked:{action['id']}")])
+            rows.append([button("К напоминаниям", "reminders")])
             try:
                 self.send(item.chat_id, f"<b>{t('Напоминание')}</b>\n{h(item.title)}", rows,
                           language=state.language)

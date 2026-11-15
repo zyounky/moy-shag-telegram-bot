@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 import pymorphy3
 
-from assistant_bot.answer_policy import (ad_finance_intent, break_even_intent, general_staff_kpi,
+from assistant_bot.answer_policy import (ad_finance_intent, bonus_example_question, break_even_intent, general_staff_kpi,
                                          sales_staff_title, staff_retention_intent, tax_regime_needed)
 
 
@@ -372,7 +372,10 @@ class Catalog:
             chunk_scores[chunk["doc"]].append((score, chunk_id))
         ranked = []
         cards = []
-        role_neutral = exclude_sales_roles or general_staff_kpi(query) or staff_retention_intent(query)
+        # An explicit question about the numeric example needs that source to
+        # explain its scope. Generic staff KPI queries still exclude sales-only advice.
+        role_neutral = (exclude_sales_roles or (general_staff_kpi(query) and not bonus_example_question(query))
+                        or staff_retention_intent(query))
         original_weight = sum(self._idf(t) for t in original) or 1
         sector = set(_tokens(context.get("sector", ""))) | query_sector
         stage = context.get("stage", "")

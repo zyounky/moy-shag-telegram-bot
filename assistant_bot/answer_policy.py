@@ -77,7 +77,12 @@ def general_staff_kpi(question):
 
 
 def sales_staff_title(title):
-    return bool(_SALES_ROLE.search(title))
+    return bool(_SALES_ROLE.search(re.sub(r"\s+", " ", title)))
+
+
+def bonus_example_question(question):
+    return bool(general_staff_kpi(question)
+                and re.search(r"80\s*%?\s*(?:[-–—−]|до)\s*85\s*%", question))
 
 
 def shop_example_mismatch(question, title):

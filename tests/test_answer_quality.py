@@ -127,6 +127,11 @@ class AnswerQualityTests(unittest.TestCase):
         generator.generate.assert_not_called()
         self.assertIn("нельзя автоматически", outbox.send.call_args.args[1])
         self.assertTrue(compose_advice("Подойдёт ли порог премии 80–85% всем сотрудникам магазина?", KPI, {}).local_complete)
+        nbsp = Evidence("Показатели эффективности менеджеров по\u00a0продажам", "", KPI.passage)
+        self.assertTrue(compose_advice("Подойдёт ли порог премии 80–85% всем сотрудникам магазина?", nbsp, {}).local_complete)
+        found = self.make_catalog(nbsp).search("Подойдёт ли порог премии 80–85% всем сотрудникам магазина?")
+        self.assertTrue(found.evidence)
+        self.assertEqual(found.evidence[0].title, nbsp.title)
 
     def test_mismatched_shop_source_gets_one_clarification_and_preserves_followup(self):
         source = Evidence("Маркетинг магазина одежды", "", "Для магазина одежды подготовьте предложение для клиентов.")

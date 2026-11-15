@@ -15,7 +15,7 @@ _FIXED_COST = re.compile(
     rf"(?:составля\w*\s*)?{_SEPARATOR}\s*({_SIGNED})\s*(?:₽|руб(?:л\w*)?\.?)(?!\w)", re.I
 )
 _MARGIN_VALUE = re.compile(
-    rf"\b(?:(доля|долю)\s+марж\w*|маржинальност\w*|маржа)\s*"
+    rf"\b(?:(дол[яюеи])\s+марж\w*|маржинальност\w*|маржа)\s*"
     rf"{_SEPARATOR}\s*({_SIGNED})(?!\d|[,.]\d)\s*(%|процент\w*)?", re.I
 )
 _ALT_PERCENT = re.compile(rf"^\s*[,;(]?\s*(?:то есть\s+)?({_SIGNED})\s*%", re.I)
@@ -26,7 +26,7 @@ _BREAK_EVEN_REVENUE_SOURCE = re.compile(
     r".{0,80}на\s+(?:дол|марж)", re.I | re.S
 )
 _AD = re.compile(r"реклам|кампани|продвижен|маркетинг|(?<!\w)ads?(?!\w)", re.I)
-_AD_PROFIT = re.compile(r"окуп\w*|рентабельност|\bromi\b|\broi\b|\broas\b|return on", re.I)
+_AD_PROFIT = re.compile(r"окуп\w*|рентабельност|возврат\w*\s+вложен|\bromi\b|\broi\b|\broas\b|return on", re.I)
 _MISSING_LEADS = re.compile(
     r"(?:не (?:записыва|учитыва|отслежива|фиксир|сохраня|счит)\w*|нет (?:уч[её]та|числа|данных по))"
     r".{0,25}(?:заяв\w*|лид\w*)|(?:заяв\w*|лид\w*).{0,20}"
@@ -57,7 +57,7 @@ _TAX_REGIME = re.compile(
 
 
 def break_even_intent(question):
-    return bool(_BREAK_EVEN.search(question))
+    return bool(_BREAK_EVEN.search(question) or re.search(r"выручк\w*.{0,20}в ноль", question, re.I))
 
 
 def ad_finance_intent(question):
@@ -73,7 +73,9 @@ def staff_retention_intent(question):
 
 
 def general_staff_kpi(question):
-    return bool(_STAFF.search(question) and _KPI.search(question) and not _SALES_ROLE.search(question))
+    all_roles = re.search(r"всем ролям|для всех ролей|включая кладовщик|всей команд\w* магазин", question, re.I)
+    return bool((_STAFF.search(question) or all_roles) and _KPI.search(question)
+                and (not _SALES_ROLE.search(question) or all_roles))
 
 
 def sales_staff_title(title):

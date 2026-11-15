@@ -156,7 +156,8 @@ def compose_advice(query: str, evidence, profile: dict, obstacle: str = "") -> A
         action = "Откройте карточку материала и проверьте, даёт ли она доступ к нужному формату."
         completion = "Отмечено, есть ли в карточке нужный файл, видео или инструмент."
         return Advice(passage, evidence.title, evidence.url, action, context, regulated,
-                      completion, answer, sourced)
+                      completion, answer, sourced,
+                      local_complete=bool(re.search(r"пункт|заполн|полный текст|содержим|услови", query, re.I)))
     if not regulated and ad_finance_intent(query) and missing_leads(f"{query}\n{obstacle}"):
         answer = ("Без числа заявок нельзя проверить стоимость заявки. Для оценки окупаемости "
                   "проверьте отдельно, сохранились ли расходы на рекламу и данные о продажах, "

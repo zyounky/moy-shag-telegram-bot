@@ -15,6 +15,7 @@ import pymorphy3
 
 from assistant_bot.answer_policy import (ad_finance_intent, bonus_example_question, break_even_intent, general_staff_kpi,
                                          sales_staff_title, staff_retention_intent, tax_regime_needed)
+from .business_intents import SEARCHES, applicable_business_source, business_topic
 
 
 DEMO_CATALOG = Path(__file__).with_name("demo_catalog.jsonl")
@@ -315,6 +316,10 @@ class Catalog:
                 return replace(example, evidence=scoped, needs_clarification=False)
         if tax_regime_needed(query):
             return SearchResult(needs_clarification=True)
+        if re.search(r"\b(?:шаблон|образец|бланк)\w*", query, re.I) and re.search(r"\bnda\b|неразглашени", query, re.I):
+            template = self._search("нужен шаблон соглашения о неразглашении", context)
+            if any(card.kind == "document" for card in template.recommendations):
+                return template
         if break_even_intent(query) and not re.search(r"\bв (?:штуках|единицах)\b", query, re.I):
             result = self._search("Как рассчитать точку безубыточности?", context)
             if result.evidence:
@@ -333,6 +338,14 @@ class Catalog:
             result = self._search("Почему сотрудники увольняются?", context)
             if result.evidence:
                 return result
+        topic = business_topic(query)
+        if topic:
+            focused_result = self._search(SEARCHES[topic], context)
+            public = tuple(e for e in focused_result.evidence
+                           if e.content_scope in {"public_text", "free_lesson"}
+                           and applicable_business_source(topic, e.title, query))
+            if public:
+                return replace(focused_result, evidence=public, needs_clarification=False)
         focused = _focus_ad_question(query)
         if focused != query:
             result = self._search(focused, context)

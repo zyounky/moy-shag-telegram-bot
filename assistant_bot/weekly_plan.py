@@ -16,7 +16,7 @@ from .weekly_sessions import schedule, sessions_for
 
 _DEFINITION = re.compile(r"^(?:что такое|что значит|что означает|определение|расшифруй|what (?:is|are))\b", re.I)
 _TASK = re.compile(
-    r"\b(?:как|нужно|хочу|помоги|план|цель|с чего|на неделю|how|plan|want|need|help)\b"
+    r"\b(?:как|нуж(?:но|на|ны|ен)|хочу|помоги|план|цель|с чего|на неделю|how|plan|want|need|help)\b"
     r"|\b(?:провер|запуст|оцен|измер|настро|увелич|улучш|свер|состав|подобра|наня|сниз|привле)\w*", re.I,
 )
 _SPACE = re.compile(r"\s+")
@@ -68,7 +68,7 @@ def offerable(question: str) -> bool:
     value = question.strip()
     if _DEFINITION.search(value) and not re.search(r"(?:[.!?]\s*|\bи\s+)как\b|\band how\b", value, re.I):
         return False
-    return len(re.findall(r"\w+", value)) >= 3 and bool(_TASK.search(value))
+    return len(re.findall(r"\w+", value)) >= 3 and bool(_TASK.search(value) or topic_for(value) == "kpi")
 
 
 def _search(catalog, question: str, profile: dict):
@@ -124,7 +124,8 @@ def _duration_bounds(context: str, minutes) -> tuple[int, int]:
 
 
 def _applicable_title(title, query, topic, profile):
-    if topic in {"retention", "hiring"} and _SALES_ROLE.search(title) and not _SALES_ROLE.search(query):
+    title = re.sub(r"\s+", " ", title)
+    if topic in {"retention", "hiring", "kpi"} and _SALES_ROLE.search(title) and not _SALES_ROLE.search(query):
         return False
     if profile.get("stage") == "launch" and re.search(r"действующ\w+\s+(?:бизнес|кофейн|магазин)", title, re.I):
         return False
@@ -165,6 +166,8 @@ def _sources(catalog, query, profile, topic):
 
 def _allowed(action, topic, context, stage):
     if topic == "ad":
+        if action.subject == "cost_per_lead" and not re.search(r"заяв|обращен|\bcpl\b", context, re.I):
+            return False
         if _ALTERNATIVE_AD_METRIC.search(context) and action.subject == "cost_per_order":
             return False
         if stage == "launch" or _NO_DATA.search(context):
@@ -234,7 +237,7 @@ def build_plan(catalog, question: str, profile: dict, *, advice=None, obstacle: 
         signature = (action.kind, action.subject, action.artifact)
         if signature in signatures or action.artifact in artifacts:
             continue
-        if not _allowed(action, topic, context, profile.get("stage")):
+        if not _allowed(action, topic, context + " " + profile.get("goal", ""), profile.get("stage")):
             continue
         if not set(action.requires) <= artifacts:
             continue
@@ -301,7 +304,7 @@ def adjustment_for(step, note):
                     "и где его проверить. Рассчитайте показатель после заполнения пробела.")
         if subject in {"repeat_purchases", "repeat_interval"}:
             return "Проверьте историю заказов одной группы. Если повторные покупки там не видны, подготовьте колонки для их будущего учёта."
-        if subject in {"team_feedback", "team_development"}:
+        if subject in {"team_feedback", "team_development", "team_change"}:
             return "Подготовьте один вопрос о ситуации в команде и согласуйте способ получить ответ без публикации имён."
         if subject in {"demand_interview", "demand_offer", "foot_traffic", "menu_test"}:
             return "Выберите одну доступную группу или точку наблюдения. Запишите, какой отклик сможете собрать и какого пока не хватает."

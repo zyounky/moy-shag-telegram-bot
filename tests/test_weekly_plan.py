@@ -693,10 +693,10 @@ class WeeklyPlanningContentTests(unittest.TestCase):
 
     def test_retention_progresses_to_observation_in_short_daily_sessions(self):
         catalog = self.fixture("Почему сотрудники увольняются",
-            "Узнайте причины их решения. Регулярный сбор обратной связи. Индивидуальные планы развития.")
+            "Узнайте причины их решения. Регулярный сбор обратной связи. Нужно учесть прошлые ошибки и изменить подход.")
         plan = build_plan(catalog, "Как снизить текучесть сотрудников?", {}, minutes=20)
         self.assertEqual([s["artifact"] for s in plan["steps"]],
-                         ["team_question_list", "team_feedback_note", "employee_development_draft"])
+                         ["team_question_list", "team_feedback_note", "team_change_draft"])
         self.assertEqual(len(plan["steps"][1]["sessions"]), 2)
         self.assertLess(plan["steps"][1]["day_end"], plan["steps"][2]["day"])
 
